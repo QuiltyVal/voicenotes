@@ -10,7 +10,15 @@
 
 Примерно **$0.30–0.45 за час встречи**: Voxtral ~$0.18 + Claude Opus 5.5 ~$0.20–0.25. С `CLAUDE_MODEL=claude-sonnet-5-5` конспект примерно вдвое дешевле. 20 часовых встреч в месяц ≈ $6–9.
 
-## Запуск на своём компьютере
+## Запуск на Mac без терминала
+
+1. Поставь Node.js: https://nodejs.org → кнопка **LTS** → установщик.
+2. Скачай проект (zip) и распакуй.
+3. Дважды кликни `start.command`. Если macOS не даёт открыть: правый клик → «Открыть» → «Открыть».
+4. В первый раз откроется файл настроек `.env`: впиши ключи (см. ниже), сохрани, снова дважды кликни `start.command`.
+5. Браузер откроется сам. Для онлайн-созвонов используй Chrome. Чтобы остановить — закрой окно терминала.
+
+## Запуск на своём компьютере (терминал)
 
 Нужен Node.js 20.12+ (лучше 22).
 
@@ -24,7 +32,7 @@ npm start
 
 Ключи:
 - `MISTRAL_API_KEY` — https://console.mistral.ai/api-keys
-- `ANTHROPIC_API_KEY` — https://console.anthropic.com/settings/keys
+- `ANTHROPIC_API_KEY` — https://console.anthropic.com/settings/keys (нужно пополнить баланс в Billing; подписка Claude Pro/Max сюда не входит — API оплачивается отдельно)
 
 ffmpeg ставится сам через npm (`ffmpeg-static`). Если не скачался, установи ffmpeg системно и укажи путь в `FFMPEG_PATH`.
 
