@@ -47,7 +47,6 @@ export const config = {
   openaiTranscribeModel: env("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-transcribe-diarize"),
   anthropicConfigured: Boolean(env("ANTHROPIC_API_KEY") || env("ANTHROPIC_AUTH_TOKEN")),
   notesLanguage: notesLanguage(env("NOTES_LANGUAGE", "ru")),
-  claudeModel: env("CLAUDE_MODEL", "claude-opus-5-5"),
   claudeEffort: effort(env("CLAUDE_EFFORT", "medium")),
   ffmpegPath: env("FFMPEG_PATH"),
 };

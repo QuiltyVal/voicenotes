@@ -3,6 +3,7 @@ import { config } from "./config.ts";
 import { normalizeAudio, splitAudio } from "./audio.ts";
 import { generateNotes } from "./structure.ts";
 import { transcribe, transcriptionProvider } from "./transcribe.ts";
+import { getSettings } from "./settings.ts";
 import {
   getMeeting,
   getTranscript,
@@ -88,7 +89,8 @@ async function runTranscription(meeting: Meeting): Promise<Meeting> {
     }
     await saveTranscript(id, { language: result.language, segments: result.segments });
     return updateMeeting(id, {
-      status: "structuring",
+      // With auto notes off, notes are made later: from the UI button or from Claude via MCP.
+      status: (await getSettings()).autoNotes ? "structuring" : "done",
       detectedLanguage: result.language ?? undefined,
       usage: {
         ...meeting.usage,
@@ -107,7 +109,7 @@ async function runStructuring(meeting: Meeting): Promise<Meeting> {
   const transcript = await getTranscript(id);
   if (!transcript) throw new Error("Нет расшифровки — сначала нужно расшифровать запись.");
 
-  console.log(`[${id}] generating notes with ${config.claudeModel}`);
+  console.log(`[${id}] generating notes`);
   const { notes, usage } = await generateNotes(meeting, transcript.segments);
   await saveNotes(id, notes);
 

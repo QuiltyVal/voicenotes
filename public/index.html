@@ -51,6 +51,26 @@
         <textarea name="glossary" rows="5" placeholder="Имена, названия компаний и продуктов, термины — по одному на строку"></textarea>
         <small>Помогает правильно распознать и написать имена и термины.</small>
       </label>
+      <label class="check">
+        <input type="checkbox" name="autoNotes">
+        <span>Составлять конспект автоматически <small>(через Claude API, платно)</small></span>
+      </label>
+      <label>
+        Модель для конспекта
+        <select name="claudeModel">
+          <option value="claude-sonnet-5-5">Sonnet 5.5 — ~$0.10 за час встречи</option>
+          <option value="claude-opus-5-5">Opus 5.5 — ~$0.20, самая умная</option>
+          <option value="claude-haiku-4-5">Haiku 4.5 — ~$0.05, попроще</option>
+        </select>
+      </label>
+      <div class="mcp-box">
+        <strong>Конспект по подписке Claude</strong>
+        <small>В Claude: Настройки → Коннекторы → «Добавить свой коннектор», вставь адрес. Потом в чате: «сделай конспект последней встречи и сохрани». Адрес — как пароль, никому не давай.</small>
+        <div class="row">
+          <input type="text" id="mcp-url" readonly>
+          <button type="button" class="btn small" id="mcp-copy">Копировать</button>
+        </div>
+      </div>
       <p class="muted" id="settings-models"></p>
       <div class="row end">
         <button value="cancel" class="btn ghost">Отмена</button>

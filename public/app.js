@@ -131,10 +131,25 @@ document.getElementById("settings-btn").addEventListener("click", () => {
   form.notesLanguage.value = settings.notesLanguage;
   form.language.value = settings.language;
   form.glossary.value = settings.glossary;
+  if (serverStatus) {
+    form.autoNotes.checked = serverStatus.autoNotes;
+    form.claudeModel.value = serverStatus.claudeModel;
+    document.getElementById("mcp-url").value = `${location.origin}${serverStatus.mcpPath}`;
+  }
   document.getElementById("settings-models").textContent = serverStatus
-    ? `Расшифровка: ${serverStatus.transcriptionModel ?? "не настроена"} · Конспект: ${serverStatus.claudeModel}`
+    ? `Расшифровка: ${serverStatus.transcriptionModel ?? "не настроена"}`
     : "";
   settingsDialog.showModal();
+});
+document.getElementById("mcp-copy").addEventListener("click", () => {
+  const input = document.getElementById("mcp-url");
+  navigator.clipboard.writeText(input.value).then(
+    () => toast("Адрес скопирован"),
+    () => {
+      input.select();
+      toast("Скопируй вручную: Cmd+C");
+    },
+  );
 });
 settingsDialog.addEventListener("close", () => {
   if (settingsDialog.returnValue !== "save") return;
@@ -143,7 +158,14 @@ settingsDialog.addEventListener("close", () => {
   settings.language = form.language.value;
   settings.glossary = form.glossary.value;
   saveSettings();
-  toast("Настройки сохранены");
+  const server = { autoNotes: form.autoNotes.checked, claudeModel: form.claudeModel.value };
+  api("/api/settings", { method: "PUT", body: JSON.stringify(server) })
+    .then((saved) => {
+      Object.assign(serverStatus ?? {}, saved);
+      renderBanners();
+      toast("Настройки сохранены");
+    })
+    .catch((err) => toast(`Не сохранилось: ${err.message}`));
 });
 
 // ---------------------------------------------------------------- IndexedDB: unsent recordings
@@ -672,7 +694,7 @@ async function renderBanners() {
       h("div", { class: "banner error" }, "Не задан ключ для расшифровки (OPENAI_API_KEY или MISTRAL_API_KEY в .env) — расшифровка не заработает."),
     );
   }
-  if (serverStatus && !serverStatus.anthropicConfigured) {
+  if (serverStatus && serverStatus.autoNotes && !serverStatus.anthropicConfigured) {
     items.push(h("div", { class: "banner error" }, "На сервере не задан ANTHROPIC_API_KEY — конспекты не заработают. См. README."));
   }
   if ((rec.state === "recording" || rec.state === "paused") && location.hash.startsWith("#/m/")) {
@@ -995,14 +1017,14 @@ function download(filename, text) {
 
 async function renderMeeting(id) {
   const token = routeToken;
-  let tab = "notes";
+  let chosenTab = null; // null = automatic: notes when they exist
   let lastStatus = null;
 
   const draw = (data) => {
     const { meeting, transcript, notes } = data;
     const audio = audioFor(meeting.id);
     const hasContent = Boolean(notes || transcript);
-    if (!notes && transcript) tab = "transcript";
+    const tab = notes ? (chosenTab ?? "notes") : "transcript";
 
     const titleInput = h("input", {
       type: "text",
@@ -1053,7 +1075,7 @@ async function renderMeeting(id) {
           role: "tab",
           "aria-selected": String(tab === name),
           onClick: () => {
-            tab = name;
+            chosenTab = name;
             draw(data);
           },
         },
@@ -1061,6 +1083,30 @@ async function renderMeeting(id) {
       );
 
     let body = null;
+    const noNotesBox =
+      !notes &&
+      transcript &&
+      !isBusy(meeting.status) &&
+      h(
+        "div",
+        { class: "status-line", style: "flex-wrap:wrap;margin-bottom:14px" },
+        h("span", { class: "grow" }, "Конспекта нет. Составь его здесь или попроси Claude в чате: «сделай конспект встречи и сохрани»."),
+        h(
+          "button",
+          {
+            class: "btn small primary",
+            onClick: async () => {
+              try {
+                await api(`/api/meetings/${meeting.id}/regenerate`, { method: "POST" });
+                poll();
+              } catch (err) {
+                toast(err.message);
+              }
+            },
+          },
+          "Составить конспект",
+        ),
+      );
     if (tab === "notes" && notes) body = renderNotes(meeting, notes, audio);
     else if (transcript) body = renderTranscript(meeting, transcript, audio, () => poll());
 
@@ -1085,6 +1131,7 @@ async function renderMeeting(id) {
           "section",
           { class: "card" },
           h("div", { class: "tabs", role: "tablist" }, notes && tabButton("notes", "Конспект"), transcript && tabButton("transcript", "Расшифровка")),
+          noNotesBox,
           body,
           h(
             "div",

@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { config, type NotesLanguage } from "./config.ts";
+import { getSettings } from "./settings.ts";
 import type { Meeting, Segment } from "./storage.ts";
 
 export const NotesSchema = z.object({
@@ -115,7 +116,7 @@ export async function generateNotes(
   segments: Segment[],
 ): Promise<{ notes: Notes; usage: { model: string; inputTokens: number; outputTokens: number } }> {
   client ??= new Anthropic({ maxRetries: 4 });
-  const model = config.claudeModel;
+  const model = (await getSettings()).claudeModel;
   const useFallbacks = FALLBACK_MODELS.has(model);
 
   const stream = client.beta.messages.stream({

@@ -7,6 +7,8 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { config, type NotesLanguage } from "./config.ts";
 import { enqueue, regenerateNotes, resumePending, retry } from "./pipeline.ts";
 import { transcriptionProvider } from "./transcribe.ts";
+import { mcpRouter } from "./mcp.ts";
+import { CLAUDE_MODELS, getSettings, updateSettings } from "./settings.ts";
 import {
   createMeetingDir,
   deleteMeeting,
@@ -34,6 +36,9 @@ function sameSecret(a: string, b: string): boolean {
   const hb = crypto.createHash("sha256").update(b).digest();
   return crypto.timingSafeEqual(ha, hb);
 }
+
+// MCP connector for Claude: protected by the secret token in its URL, not by the password.
+app.use("/mcp", mcpRouter());
 
 // Optional HTTP Basic auth: any username, the password must match APP_PASSWORD.
 app.use((req, res, next) => {
@@ -104,15 +109,24 @@ function transcriptionConfigured(): boolean {
   return Boolean(provider.name === "openai" ? config.openaiApiKey : config.mistralApiKey);
 }
 
-app.get("/api/status", (_req, res) => {
+app.get("/api/status", async (_req, res) => {
   const provider = transcriptionProvider();
+  const settings = await getSettings();
   res.json({
     transcriptionConfigured: transcriptionConfigured(),
     transcriptionModel: provider ? `${provider.name}/${provider.model}` : null,
     anthropicConfigured: config.anthropicConfigured,
     notesLanguage: config.notesLanguage,
-    claudeModel: config.claudeModel,
+    autoNotes: settings.autoNotes,
+    claudeModel: settings.claudeModel,
+    claudeModels: CLAUDE_MODELS,
+    mcpPath: `/mcp/${settings.mcpToken}`,
   });
+});
+
+app.put("/api/settings", async (req, res) => {
+  const settings = await updateSettings((req.body ?? {}) as Record<string, unknown>);
+  res.json({ autoNotes: settings.autoNotes, claudeModel: settings.claudeModel });
 });
 
 app.get("/api/meetings", async (_req, res) => {
