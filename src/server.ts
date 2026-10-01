@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { config, type NotesLanguage } from "./config.ts";
 import { enqueue, regenerateNotes, resumePending, retry } from "./pipeline.ts";
+import { transcriptionProvider } from "./transcribe.ts";
 import {
   createMeetingDir,
   deleteMeeting,
@@ -97,13 +98,20 @@ async function loadMeeting(req: Request, res: Response): Promise<Meeting | null>
   return meeting;
 }
 
+function transcriptionConfigured(): boolean {
+  const provider = transcriptionProvider();
+  if (!provider) return false;
+  return Boolean(provider.name === "openai" ? config.openaiApiKey : config.mistralApiKey);
+}
+
 app.get("/api/status", (_req, res) => {
+  const provider = transcriptionProvider();
   res.json({
-    mistralConfigured: Boolean(config.mistralApiKey),
+    transcriptionConfigured: transcriptionConfigured(),
+    transcriptionModel: provider ? `${provider.name}/${provider.model}` : null,
     anthropicConfigured: config.anthropicConfigured,
     notesLanguage: config.notesLanguage,
     claudeModel: config.claudeModel,
-    voxtralModel: config.voxtralModel,
   });
 });
 
@@ -221,7 +229,9 @@ fs.mkdirSync(path.join(config.dataDir, "meetings"), { recursive: true });
 app.listen(config.port, config.host, () => {
   console.log(`Voicenotes: http://${config.host === "0.0.0.0" ? "localhost" : config.host}:${config.port}`);
   console.log(`Данные: ${config.dataDir}`);
-  if (!config.mistralApiKey) console.warn("⚠ MISTRAL_API_KEY не задан — расшифровка работать не будет.");
+  const provider = transcriptionProvider();
+  if (transcriptionConfigured()) console.log(`Расшифровка: ${provider!.name} (${provider!.model})`);
+  else console.warn("⚠ Не задан ключ для расшифровки (OPENAI_API_KEY или MISTRAL_API_KEY) — расшифровка работать не будет.");
   if (!config.anthropicConfigured) console.warn("⚠ ANTHROPIC_API_KEY не задан — конспекты работать не будут.");
   if (!config.appPassword && config.host !== "127.0.0.1" && config.host !== "localhost") {
     console.warn("⚠ Сервер доступен из сети без пароля. Задай APP_PASSWORD в .env.");

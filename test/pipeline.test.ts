@@ -8,7 +8,7 @@ import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type { TranscriptionResponse } from "@mistralai/mistralai/models/components";
 import { normalizeAudio, parseFfmpegDuration } from "../src/audio.ts";
 import { NotesSchema, formatTimestamp, formatTranscript, mergeTurns } from "../src/structure.ts";
-import { toSegments } from "../src/transcribe.ts";
+import { mistralSegments } from "../src/transcribe-mistral.ts";
 
 function response(segments: { text: string; start: number; end: number; speakerId: string | null }[]): TranscriptionResponse {
   return {
@@ -20,11 +20,9 @@ function response(segments: { text: string; start: number; end: number; speakerI
   };
 }
 
-test("toSegments labels speakers in order of first appearance", () => {
-  const segments = toSegments([
-    {
-      part: 0,
-      offset: 0,
+test("mistralSegments labels speakers in order of first appearance", () => {
+  const segments = mistralSegments([
+    { offset: 0,
       response: response([
         { text: " Привет ", start: 0, end: 1.5, speakerId: "speaker_7" },
         { text: "Здравствуйте", start: 1.5, end: 3, speakerId: "speaker_2" },
@@ -43,10 +41,10 @@ test("toSegments labels speakers in order of first appearance", () => {
   );
 });
 
-test("toSegments offsets later parts and keeps their speakers separate", () => {
-  const segments = toSegments([
-    { part: 0, offset: 0, response: response([{ text: "a", start: 1, end: 2, speakerId: "speaker_0" }]) },
-    { part: 1, offset: 600, response: response([{ text: "b", start: 1, end: 2, speakerId: "speaker_0" }]) },
+test("mistralSegments offsets later parts and keeps their speakers separate", () => {
+  const segments = mistralSegments([
+    { offset: 0, response: response([{ text: "a", start: 1, end: 2, speakerId: "speaker_0" }]) },
+    { offset: 600, response: response([{ text: "b", start: 1, end: 2, speakerId: "speaker_0" }]) },
   ]);
   assert.deepEqual(
     segments.map((s) => [s.speaker, s.start]),
@@ -57,9 +55,9 @@ test("toSegments offsets later parts and keeps their speakers separate", () => {
   );
 });
 
-test("toSegments falls back to plain text when there are no segments", () => {
-  const segments = toSegments([
-    { part: 0, offset: 0, response: { model: "v", text: "Только текст", language: null, usage: {} } },
+test("mistralSegments falls back to plain text when there are no segments", () => {
+  const segments = mistralSegments([
+    { offset: 0, response: { model: "v", text: "Только текст", language: null, usage: {} } },
   ]);
   assert.deepEqual(segments, [{ speaker: "S1", start: 0, end: 0, text: "Только текст" }]);
 });

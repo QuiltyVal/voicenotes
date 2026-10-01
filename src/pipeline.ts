@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { config } from "./config.ts";
 import { normalizeAudio, splitAudio } from "./audio.ts";
 import { generateNotes } from "./structure.ts";
-import { transcribe } from "./transcribe.ts";
+import { transcribe, transcriptionProvider } from "./transcribe.ts";
 import {
   getMeeting,
   getTranscript,
@@ -71,13 +71,16 @@ async function runTranscription(meeting: Meeting): Promise<Meeting> {
     meeting = await updateMeeting(id, { durationSec });
   }
 
+  const provider = transcriptionProvider();
+  if (!provider) throw new Error("Не задан ключ для расшифровки: впиши OPENAI_API_KEY или MISTRAL_API_KEY в .env.");
+
   const duration = meeting.durationSec ?? 0;
   const parts =
-    duration > config.maxPartSeconds
-      ? (await splitAudio(audio, config.maxPartSeconds)).map((file, i) => ({ file, offset: i * config.maxPartSeconds }))
+    duration > provider.maxPartSeconds
+      ? (await splitAudio(audio, provider.maxPartSeconds)).map((file, i) => ({ file, offset: i * provider.maxPartSeconds }))
       : [{ file: audio, offset: 0 }];
 
-  console.log(`[${id}] transcribing ${Math.round(duration / 60)} min in ${parts.length} part(s)`);
+  console.log(`[${id}] transcribing ${Math.round(duration / 60)} min in ${parts.length} part(s) with ${provider.name}`);
   try {
     const result = await transcribe(parts, { language: meeting.language, glossary: meeting.glossary });
     if (!result.segments.length) {
@@ -87,7 +90,11 @@ async function runTranscription(meeting: Meeting): Promise<Meeting> {
     return updateMeeting(id, {
       status: "structuring",
       detectedLanguage: result.language ?? undefined,
-      usage: { ...meeting.usage, transcriptionSeconds: result.audioSeconds || duration },
+      usage: {
+        ...meeting.usage,
+        transcriptionModel: `${provider.name}/${result.model}`,
+        transcriptionSeconds: result.audioSeconds || duration,
+      },
     });
   } finally {
     if (parts.length > 1) await Promise.all(parts.map((p) => fs.rm(p.file, { force: true })));

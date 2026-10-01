@@ -27,6 +27,7 @@ export interface Meeting {
   /** Speaker label (S1, S2, ...) -> display name. */
   speakers: Record<string, string>;
   usage?: {
+    transcriptionModel?: string;
     transcriptionSeconds?: number;
     claudeModel?: string;
     claudeInputTokens?: number;

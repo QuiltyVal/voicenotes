@@ -71,6 +71,18 @@ export async function normalizeAudio(input: string, output: string): Promise<num
   return parseFfmpegDuration(stderr);
 }
 
+/** Cuts a short mono 16 kHz WAV clip (used as a voice sample for speaker matching). */
+export async function extractClip(input: string, start: number, duration: number, output: string): Promise<void> {
+  await runFfmpeg([
+    "-ss", start.toFixed(2),
+    "-t", duration.toFixed(2),
+    "-i", input,
+    "-ac", "1",
+    "-ar", "16000",
+    output,
+  ]);
+}
+
 /** Splits audio into parts no longer than `partSeconds`. Returns the part paths in order. */
 export async function splitAudio(input: string, partSeconds: number): Promise<string[]> {
   const dir = path.dirname(input);

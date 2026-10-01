@@ -132,7 +132,7 @@ document.getElementById("settings-btn").addEventListener("click", () => {
   form.language.value = settings.language;
   form.glossary.value = settings.glossary;
   document.getElementById("settings-models").textContent = serverStatus
-    ? `Расшифровка: ${serverStatus.voxtralModel} · Конспект: ${serverStatus.claudeModel}`
+    ? `Расшифровка: ${serverStatus.transcriptionModel ?? "не настроена"} · Конспект: ${serverStatus.claudeModel}`
     : "";
   settingsDialog.showModal();
 });
@@ -667,8 +667,10 @@ function renderRecorder() {
 
 async function renderBanners() {
   const items = [];
-  if (serverStatus && !serverStatus.mistralConfigured) {
-    items.push(h("div", { class: "banner error" }, "На сервере не задан MISTRAL_API_KEY — расшифровка не заработает. См. README."));
+  if (serverStatus && !serverStatus.transcriptionConfigured) {
+    items.push(
+      h("div", { class: "banner error" }, "Не задан ключ для расшифровки (OPENAI_API_KEY или MISTRAL_API_KEY в .env) — расшифровка не заработает."),
+    );
   }
   if (serverStatus && !serverStatus.anthropicConfigured) {
     items.push(h("div", { class: "banner error" }, "На сервере не задан ANTHROPIC_API_KEY — конспекты не заработают. См. README."));

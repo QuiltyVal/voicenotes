@@ -28,7 +28,7 @@ if [ ! -f .env ]; then
   cp .env.example .env
   echo
   echo "Создан файл настроек .env и открыт в TextEdit."
-  echo "Впиши ключи после MISTRAL_API_KEY= и ANTHROPIC_API_KEY= (без пробелов и кавычек),"
+  echo "Впиши ключи после ANTHROPIC_API_KEY= и OPENAI_API_KEY= (без пробелов и кавычек),"
   echo "сохрани (Cmd+S) и снова дважды кликни start.command."
   open -e .env
   pause
