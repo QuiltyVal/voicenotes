@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="icons/48.png" alt="" width="22" height="22">
+    <strong>Voicenotes</strong>
+    <button id="toggle-settings" class="icon" title="Настройки">⚙︎</button>
+  </header>
+
+  <section id="settings" hidden>
+    <label>Адрес приложения <input id="url" type="url" placeholder="https://notes.example.com"></label>
+    <label>Пароль <input id="password" type="password" autocomplete="off"></label>
+    <button id="save" class="btn primary">Сохранить и проверить</button>
+    <p id="settings-status" class="muted"></p>
+  </section>
+
+  <section id="main"></section>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

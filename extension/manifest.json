@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Voicenotes",
+  "version": "0.1.0",
+  "description": "Записывает звук созвона во вкладке и твой микрофон одной кнопкой и отправляет в Voicenotes.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
+  },
+  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["tabCapture", "offscreen", "storage"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"]
+}
