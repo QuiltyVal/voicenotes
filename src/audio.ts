@@ -24,7 +24,7 @@ function resolveFfmpeg(): Promise<string> {
   return ffmpegBinary;
 }
 
-function runFfmpeg(args: string[]): Promise<string> {
+function runFfmpeg(args: string[], { allowFailure = false } = {}): Promise<string> {
   return resolveFfmpeg().then(
     (bin) =>
       new Promise((resolve, reject) => {
@@ -39,11 +39,15 @@ function runFfmpeg(args: string[]): Promise<string> {
           reject(new Error(`Не удалось запустить ffmpeg (${bin}): ${err.message}`)),
         );
         proc.on("close", (code) => {
-          if (code === 0) resolve(stderr);
+          if (code === 0 || allowFailure) resolve(stderr);
           else reject(new Error(`ffmpeg завершился с кодом ${code}: ${stderr.slice(-800)}`));
         });
       }),
   );
+}
+
+export function countAudioStreams(ffmpegInfo: string): number {
+  return (ffmpegInfo.match(/^\s*Stream #0:\d+.*: Audio:/gm) ?? []).length;
 }
 
 /** Parses the last "time=HH:MM:SS.ss" progress mark that ffmpeg prints. */
@@ -59,8 +63,17 @@ export function parseFfmpegDuration(stderr: string): number | undefined {
  * The result is what gets transcribed and what the UI plays back (Safari can't play webm).
  */
 export async function normalizeAudio(input: string, output: string): Promise<number | undefined> {
+  // ffmpeg without an output just describes the file (and exits non-zero).
+  const info = await runFfmpeg(["-i", input], { allowFailure: true });
+  const audioStreams = countAudioStreams(info);
+  // Several audio tracks (e.g. call audio + microphone from the Mac app) are mixed into one.
+  const mix =
+    audioStreams > 1
+      ? ["-filter_complex", `${Array.from({ length: audioStreams }, (_, i) => `[0:a:${i}]`).join("")}amix=inputs=${audioStreams}:duration=longest:normalize=0[a]`, "-map", "[a]"]
+      : [];
   const stderr = await runFfmpeg([
     "-i", input,
+    ...mix,
     "-vn",
     "-ac", "1",
     "-ar", "16000",

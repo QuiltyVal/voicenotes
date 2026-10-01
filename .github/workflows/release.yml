@@ -1,0 +1,26 @@
+name: Build Mac app and extension
+
+on:
+  push:
+    paths: ["mac/**", "extension/**", ".github/workflows/release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Mac app
+        run: ./mac/build.sh
+      - name: Package Chrome extension
+        run: cd extension && zip -qr ../voicenotes-extension.zip .
+      - name: Publish to the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp mac/build/Voicenotes.zip Voicenotes-mac.zip
+          gh release view latest >/dev/null 2>&1 || gh release create latest --title "Voicenotes" --notes "Программа для Мака и расширение для Chrome. Инструкция — в README." --target "$GITHUB_SHA"
+          gh release upload latest Voicenotes-mac.zip voicenotes-extension.zip --clobber
