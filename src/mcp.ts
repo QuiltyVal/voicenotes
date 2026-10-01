@@ -90,6 +90,9 @@ function buildServer(): McpServer {
       const parts = [meetingLine(meeting)];
       if (meeting.context) parts.push(`User's description: ${meeting.context}`);
       if (meeting.glossary.length) parts.push(`Glossary: ${meeting.glossary.join(", ")}`);
+      if (meeting.userNotes?.trim()) {
+        parts.push("", "<user_notes> (typed by the user during the meeting — cover and expand every point)", meeting.userNotes.trim(), "</user_notes>");
+      }
       parts.push("", transcript ? `<transcript>\n${formatTranscript(transcript.segments, meeting.speakers)}\n</transcript>` : "No transcript yet.");
       if (notes) parts.push("", "<existing_notes>", notesToMarkdown(notes, meeting.speakers), "</existing_notes>");
       return text(parts.join("\n"));

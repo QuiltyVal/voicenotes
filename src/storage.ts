@@ -18,6 +18,8 @@ export interface Meeting {
   durationSec?: number;
   /** Optional description of what the meeting is about, given by the user. */
   context: string;
+  /** The user's own notes typed during the meeting (Granola-style); Claude expands them. */
+  userNotes?: string;
   /** Names, product terms and jargon that help both transcription and notes. */
   glossary: string[];
   /** Spoken language hint for transcription ("" = auto-detect). */

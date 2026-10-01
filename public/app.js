@@ -271,12 +271,23 @@ function uploadParams(meta, extra = {}) {
   };
 }
 
+/** Saves notes typed during the meeting; sent separately because they can be long. */
+async function attachNotes(meetingId, userNotes) {
+  if (!userNotes?.trim()) return;
+  try {
+    await api(`/api/meetings/${meetingId}`, { method: "PATCH", body: JSON.stringify({ userNotes }) });
+  } catch (err) {
+    toast(`Заметки не сохранились: ${err.message}`);
+  }
+}
+
 // ---------------------------------------------------------------- recorder
 
 const rec = {
   state: "idle", // idle | starting | recording | paused | uploading
   title: "",
   context: "",
+  userNotes: "",
   warning: "",
   progress: 0,
   media: null,
@@ -445,7 +456,7 @@ async function startRecording() {
       const meta = rec.meta;
       meta.durationMs = Math.round(elapsedMs());
       localRecordings.addChunk(meta.id, rec.seq++, e.data);
-      localRecordings.put({ ...meta, title: rec.title, context: rec.context });
+      localRecordings.put({ ...meta, title: rec.title, context: rec.context, userNotes: rec.userNotes });
     };
     media.onstop = () => finishRecording();
 
@@ -491,7 +502,7 @@ function stopRecording() {
 
 async function finishRecording() {
   releaseMedia();
-  const meta = { ...rec.meta, title: rec.title, context: rec.context, durationMs: Math.round(rec.elapsed) };
+  const meta = { ...rec.meta, title: rec.title, context: rec.context, userNotes: rec.userNotes, durationMs: Math.round(rec.elapsed) };
   const blob = new Blob(rec.chunks, { type: meta.mime });
   rec.chunks = [];
   await localRecordings.put(meta);
@@ -508,10 +519,13 @@ async function uploadRecording(meta, blob) {
       const bar = document.getElementById("upload-bar");
       if (bar) bar.style.width = `${Math.round(p * 100)}%`;
     });
+    await attachNotes(meeting.id, meta.userNotes);
     await localRecordings.remove(meta.id);
     rec.lastFailed = null;
     rec.title = "";
     rec.context = "";
+    rec.userNotes = "";
+    notesArea.value = "";
     rec.state = "idle";
     location.hash = `#/m/${meeting.id}`;
   } catch (err) {
@@ -540,8 +554,11 @@ async function uploadFile(file) {
       const bar = document.getElementById("upload-bar");
       if (bar) bar.style.width = `${Math.round(p * 100)}%`;
     });
+    await attachNotes(meeting.id, rec.userNotes);
     rec.title = "";
     rec.context = "";
+    rec.userNotes = "";
+    notesArea.value = "";
     rec.state = "idle";
     location.hash = `#/m/${meeting.id}`;
   } catch (err) {
@@ -550,6 +567,14 @@ async function uploadFile(file) {
     renderRecorder();
   }
 }
+
+// One element for the whole session, so re-renders never drop what's being typed.
+const notesArea = h("textarea", {
+  class: "live-notes",
+  rows: 5,
+  placeholder: "Твои заметки по ходу встречи — коротко, по пунктам. Claude дополнит их подробностями из записи.",
+  onInput: (e) => (rec.userNotes = e.target.value),
+});
 
 function renderRecorder() {
   const card = document.getElementById("recorder");
@@ -613,7 +638,7 @@ function renderRecorder() {
       ),
       h(
         "div",
-        { class: "row", style: "justify-content:center" },
+        { class: "row", style: "justify-content:center;margin-bottom:14px" },
         rec.state !== "starting" &&
           h(
             "button",
@@ -624,6 +649,7 @@ function renderRecorder() {
       settings.mode === "mix" &&
         rec.state !== "starting" &&
         h("p", { class: "muted consent" }, "Можно переключиться на вкладку или приложение созвона — запись продолжится."),
+      notesArea,
       details,
     );
     return;
@@ -673,6 +699,7 @@ function renderRecorder() {
       h("span", { class: "dot" }),
     ),
     h("div", { class: "muted" }, "Начать запись"),
+    notesArea,
     details,
     h("p", { class: "muted consent" }, "Перед записью предупреди участников и получи их согласие."),
     h(
@@ -723,6 +750,7 @@ async function renderBanners() {
             const meeting = await uploadBlob(blob, uploadParams(meta), (p) => {
               uploadBtn.textContent = `${Math.round(p * 100)}%`;
             });
+            await attachNotes(meeting.id, meta.userNotes);
             await localRecordings.remove(meta.id);
             location.hash = `#/m/${meeting.id}`;
           } catch (err) {
@@ -997,6 +1025,7 @@ function toMarkdown(meeting, notes, transcript, withTranscript) {
       );
     }
   }
+  if (meeting.userNotes?.trim()) lines.push("## Мои заметки", "", meeting.userNotes.trim(), "");
   if (withTranscript && transcript) {
     lines.push("## Расшифровка", "");
     for (const turn of mergeTurns(transcript.segments)) {
@@ -1125,6 +1154,25 @@ async function renderMeeting(id) {
         ),
         statusEl && h("div", { style: "margin-top:14px" }, statusEl),
         meeting.status !== "uploaded" && audio,
+        h(
+          "details",
+          { class: "my-notes", open: Boolean(meeting.userNotes?.trim()) || undefined },
+          h("summary", {}, "Мои заметки"),
+          h("textarea", {
+            rows: 5,
+            value: meeting.userNotes ?? "",
+            placeholder: "Что было важно для тебя. Claude учтёт это при пересборке конспекта.",
+            onChange: async (e) => {
+              try {
+                await api(`/api/meetings/${meeting.id}`, { method: "PATCH", body: JSON.stringify({ userNotes: e.target.value }) });
+                meeting.userNotes = e.target.value;
+                toast(notes ? "Заметки сохранены — нажми «Пересобрать конспект», чтобы учесть их" : "Заметки сохранены");
+              } catch (err) {
+                toast(err.message);
+              }
+            },
+          }),
+        ),
       ),
       hasContent &&
         h(

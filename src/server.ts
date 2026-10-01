@@ -180,6 +180,7 @@ app.patch("/api/meetings/:id", async (req, res) => {
   const patch: Partial<Meeting> = {};
   if (typeof body.title === "string") patch.title = body.title.slice(0, 200).trim();
   if (typeof body.context === "string") patch.context = body.context.slice(0, 2000).trim();
+  if (typeof body.userNotes === "string") patch.userNotes = body.userNotes.slice(0, 50_000);
   if (body.glossary !== undefined) patch.glossary = parseGlossary(body.glossary);
   if (body.notesLanguage !== undefined) patch.notesLanguage = parseNotesLanguage(body.notesLanguage);
   if (body.speakers && typeof body.speakers === "object") {

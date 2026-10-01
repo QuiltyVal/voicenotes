@@ -67,6 +67,8 @@ How to fill the fields:
 - action_items: concrete follow-ups someone committed to or was asked to do, with owner and deadline when stated.
 - open_questions: unresolved issues and things left to clarify.
 
+If the user took their own notes during the meeting (<user_notes>), they show what mattered most to them: make sure every one of their points is covered and expanded with details from the transcript, and keep their wording where it fits. If a note contradicts the transcript, trust the transcript and mention the discrepancy under open questions.
+
 ${languageRule} Keep people's names, product names and technical terms in their original form. Prefer short, information-dense bullet points. Empty lists are fine when the meeting had none.`;
 }
 
@@ -133,6 +135,7 @@ export async function generateNotes(
         role: "user",
         content:
           `<meeting_info>\n${meetingInfo(meeting)}\n</meeting_info>\n\n` +
+          (meeting.userNotes?.trim() ? `<user_notes>\n${meeting.userNotes.trim()}\n</user_notes>\n\n` : "") +
           `<transcript>\n${formatTranscript(segments, meeting.speakers)}\n</transcript>`,
       },
     ],

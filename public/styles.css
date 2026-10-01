@@ -418,3 +418,7 @@ dialog::backdrop { background: rgb(0 0 0 / 0.35); }
   .turn .text { grid-column: 1; }
   .segmented button { padding: 8px 10px; }
 }
+
+.live-notes { display: block; max-width: 520px; margin: 14px auto 0; text-align: left; }
+.my-notes { margin-top: 14px; }
+.my-notes summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
