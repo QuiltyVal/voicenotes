@@ -1,0 +1,29 @@
+# Деплой на сервер: приложение + Caddy, который сам получает HTTPS-сертификат.
+# Нужен домен (DOMAIN в .env), указывающий на IP сервера. Запуск: docker compose up -d --build
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATA_DIR: /data
+    volumes:
+      - voicenotes-data:/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    command: caddy reverse-proxy --from ${DOMAIN:?Укажи DOMAIN в .env} --to app:3000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  voicenotes-data:
+  caddy-data:

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Voicenotes</title>
+  <meta name="theme-color" content="#4f46e5">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="#/" class="brand">
+      <img src="/icon.svg" alt="" width="28" height="28">
+      <span>Voicenotes</span>
+    </a>
+    <button id="settings-btn" class="icon-btn" title="Настройки" aria-label="Настройки">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+    </button>
+  </header>
+
+  <div id="banners"></div>
+  <main id="app"></main>
+
+  <dialog id="settings">
+    <form method="dialog" class="settings-form">
+      <h2>Настройки</h2>
+      <label>
+        Язык конспекта
+        <select name="notesLanguage">
+          <option value="ru">Русский</option>
+          <option value="de">Deutsch</option>
+          <option value="en">English</option>
+          <option value="auto">Как во встрече</option>
+        </select>
+      </label>
+      <label>
+        Язык встречи
+        <select name="language">
+          <option value="">Определять автоматически</option>
+          <option value="ru">Русский</option>
+          <option value="de">Deutsch</option>
+          <option value="en">English</option>
+        </select>
+        <small>Подсказка для расшифровки. Если в одной встрече говорят на разных языках, оставь «автоматически».</small>
+      </label>
+      <label>
+        Глоссарий
+        <textarea name="glossary" rows="5" placeholder="Имена, названия компаний и продуктов, термины — по одному на строку"></textarea>
+        <small>Помогает правильно распознать и написать имена и термины.</small>
+      </label>
+      <p class="muted" id="settings-models"></p>
+      <div class="row end">
+        <button value="cancel" class="btn ghost">Отмена</button>
+        <button value="save" class="btn primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
