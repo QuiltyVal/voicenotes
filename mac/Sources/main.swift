@@ -455,20 +455,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showSettings() {
         let current = ServerSettings.load()
-        let urlField = NSTextField(string: current?.url ?? "")
+        // Plain frame layout: NSAlert's accessory view doesn't size stack views reliably.
+        let width: CGFloat = 320
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 116))
+        func label(_ text: String, y: CGFloat) {
+            let field = NSTextField(labelWithString: text)
+            field.font = .systemFont(ofSize: 12, weight: .medium)
+            field.frame = NSRect(x: 0, y: y, width: width, height: 16)
+            container.addSubview(field)
+        }
+        label("Адрес приложения", y: 98)
+        let urlField = NSTextField(frame: NSRect(x: 0, y: 70, width: width, height: 24))
+        urlField.stringValue = current?.url ?? ""
         urlField.placeholderString = "https://notes.example.com"
-        let passwordField = NSSecureTextField(string: current?.password ?? "")
-        passwordField.placeholderString = "Пароль от приложения"
-        for field in [urlField, passwordField] { field.frame = NSRect(x: 0, y: 0, width: 300, height: 24) }
-        let stack = NSStackView(views: [urlField, passwordField])
-        stack.orientation = .vertical
-        stack.spacing = 8
-        stack.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
+        container.addSubview(urlField)
+        label("Пароль от приложения", y: 40)
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 12, width: width, height: 24))
+        passwordField.stringValue = current?.password ?? ""
+        container.addSubview(passwordField)
 
         let dialog = NSAlert()
         dialog.messageText = "Настройки Voicenotes"
-        dialog.informativeText = "Адрес твоего приложения и пароль от него."
-        dialog.accessoryView = stack
+        dialog.informativeText = "Тот же адрес, что открываешь в браузере, и тот же пароль."
+        dialog.accessoryView = container
         dialog.addButton(withTitle: "Сохранить")
         dialog.addButton(withTitle: "Отмена")
         NSApp.activate(ignoringOtherApps: true)
