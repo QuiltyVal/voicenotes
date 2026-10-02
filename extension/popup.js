@@ -3,6 +3,7 @@ const settingsEl = document.getElementById("settings");
 const urlInput = document.getElementById("url");
 const passwordInput = document.getElementById("password");
 const settingsStatus = document.getElementById("settings-status");
+document.getElementById("version").textContent = `v${chrome.runtime.getManifest().version}`;
 
 function h(tag, props = {}, ...children) {
   const el = document.createElement(tag);
@@ -57,14 +58,11 @@ document.getElementById("save").addEventListener("click", async () => {
     settingsStatus.textContent = "Неверный адрес";
     return;
   }
+  // http:// on a real domain is redirected to https, which drops the password.
+  if (url.protocol === "http:" && !["localhost", "127.0.0.1"].includes(url.hostname)) url.protocol = "https:";
   const origin = url.origin;
-  // Access to the user's own server is asked for at runtime, only for that address.
-  const granted = await chrome.permissions.request({ origins: [`${origin}/*`] });
-  if (!granted) {
-    settingsStatus.textContent = "Без доступа к адресу расширение не сможет загружать записи.";
-    return;
-  }
-  const server = { url: origin, password: passwordInput.value };
+  urlInput.value = origin;
+  const server = { url: origin, password: passwordInput.value.trim() };
   await chrome.storage.local.set({ server });
   settingsStatus.textContent = "Проверяю…";
   try {
@@ -72,7 +70,7 @@ document.getElementById("save").addEventListener("click", async () => {
       ? { Authorization: `Basic ${btoa(unescape(encodeURIComponent(`voicenotes:${server.password}`)))}` }
       : {};
     const res = await fetch(`${origin}/api/status`, { headers });
-    if (res.status === 401) throw new Error("неверный пароль");
+    if (res.status === 401) throw new Error("сервер не принял пароль (логин не нужен, только пароль от приложения)");
     if (!res.ok) throw new Error(`сервер ответил ${res.status}`);
     settingsStatus.textContent = "✓ Подключено";
     setTimeout(() => (settingsEl.hidden = true), 700);
