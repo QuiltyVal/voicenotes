@@ -41,6 +41,16 @@ rm -rf "$EXT"
 cp -R "$WORK/extension" "$EXT"
 
 open /Applications/Voicenotes.app
+sleep 4
+if ! pgrep -x Voicenotes >/dev/null; then
+  say "Программа не запустилась — вот что она пишет:"
+  /Applications/Voicenotes.app/Contents/MacOS/Voicenotes > "$WORK/run.log" 2>&1 &
+  sleep 5
+  cat "$WORK/run.log"
+  REPORT=$(ls -t "$HOME/Library/Logs/DiagnosticReports" 2>/dev/null | grep -i voicenotes | head -1 || true)
+  [ -n "$REPORT" ] && head -60 "$HOME/Library/Logs/DiagnosticReports/$REPORT"
+  die "Сделай скриншот этого окна и пришли."
+fi
 printf '\n\033[1;32m✔ Готово!\033[0m\n'
 cat <<DONE
    Значок Voicenotes появился в строке меню (справа сверху, рядом с часами).

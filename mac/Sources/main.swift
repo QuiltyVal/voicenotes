@@ -271,13 +271,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case failed(file: URL, recordedAt: Date, error: String)
     }
 
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    // Created in applicationDidFinishLaunching: items made earlier can stay invisible on newer macOS.
+    private var statusItem: NSStatusItem!
     private let recorder = Recorder()
     private var state = State.idle { didSet { refresh() } }
     private var timer: Timer?
     private var lastMeeting: URL?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.isVisible = true
+        NSLog("Voicenotes: started")
         recorder.onStop = { [weak self] error in
             guard let self, case .recording = self.state else { return }
             self.alert("Запись остановилась", error.localizedDescription)
@@ -292,7 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Menu
 
     private func refresh() {
-        guard let button = statusItem.button else { return }
+        guard let statusItem, let button = statusItem.button else { return }
         let menu = NSMenu()
         func item(_ title: String, _ action: Selector?, enabled: Bool = true) {
             let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
@@ -306,7 +310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch state {
         case .idle:
             button.image = symbol("waveform")
-            button.title = ""
+            button.title = button.image == nil ? "VN" : ""
             item("Начать запись", #selector(startRecording))
             menu.addItem(.separator())
             item("Пишется звук всех приложений и микрофон. Предупреди участников.", nil, enabled: false)
@@ -323,11 +327,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Остановить и отправить", #selector(stopRecording))
         case .uploading:
             button.image = symbol("arrow.up.circle")
-            button.title = ""
+            button.title = button.image == nil ? "VN" : ""
             item("Отправляю запись…", nil, enabled: false)
         case .failed(_, _, let error):
             button.image = symbol("exclamationmark.triangle")
-            button.title = ""
+            button.title = button.image == nil ? "VN" : ""
             item("Не отправилось: \(error)", nil, enabled: false)
             item("Повторить отправку", #selector(retryUpload))
             item("Показать файл в Finder", #selector(revealFailed))
@@ -350,6 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func symbol(_ name: String) -> NSImage? {
         let image = NSImage(systemSymbolName: name, accessibilityDescription: "Voicenotes")
         image?.isTemplate = true
+        if image == nil { statusItem.button?.title = "VN" } // never leave an empty, zero-width item
         return image
     }
 
