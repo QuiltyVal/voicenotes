@@ -4,38 +4,8 @@
 import AVFoundation
 import Cocoa
 import ScreenCaptureKit
-import Security
 
 // MARK: - Settings
-
-enum Keychain {
-    static let service = "Voicenotes"
-
-    static func get(_ account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    static func set(_ value: String, for account: String) {
-        let base: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(base as CFDictionary)
-        var add = base
-        add[kSecValueData as String] = Data(value.utf8)
-        SecItemAdd(add as CFDictionary, nil)
-    }
-}
 
 struct ServerSettings {
     var url: String
@@ -43,12 +13,13 @@ struct ServerSettings {
 
     static func load() -> ServerSettings? {
         guard let url = UserDefaults.standard.string(forKey: "serverURL"), !url.isEmpty else { return nil }
-        return ServerSettings(url: url, password: Keychain.get(url) ?? "")
+        // Stored in the app's own preferences: no Keychain, so macOS never asks for the Mac password.
+        return ServerSettings(url: url, password: UserDefaults.standard.string(forKey: "serverPassword") ?? "")
     }
 
     func save() {
         UserDefaults.standard.set(url, forKey: "serverURL")
-        Keychain.set(password, for: url)
+        UserDefaults.standard.set(password, forKey: "serverPassword")
     }
 
     static func normalize(_ raw: String) -> String {
