@@ -49,9 +49,14 @@ struct ServerSettings {
         request.timeoutInterval = 15
         authorize(&request)
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
             switch (response as? HTTPURLResponse)?.statusCode ?? 0 {
-            case 200: return nil
+            case 200:
+                let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                if json?["multitrack"] as? Bool != true {
+                    return "Сервер устарел: он не смешивает звук созвона с микрофоном, и твой голос пропадёт. Обнови его: зайди на сервер по SSH и запусти команду установки ещё раз."
+                }
+                return nil
             case 401: return "Сервер не принял пароль. Введи тот же пароль, что при входе в приложение в браузере (логин там любой)."
             case let code: return "Сервер ответил \(code). Проверь адрес — тот же, что открываешь в браузере."
             }
@@ -538,6 +543,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         state = .uploading
+        // Never upload to a server that would silently drop the microphone track.
+        if let problem = await server.check() {
+            state = .failed(file: file, recordedAt: recordedAt, error: problem)
+            alert("Запись не отправлена", problem + "\n\nЗапись сохранена — после исправления нажми «Повторить отправку».")
+            return
+        }
         do {
             let meeting = try await upload(file: file, recordedAt: recordedAt, to: server)
             try? FileManager.default.removeItem(at: file)

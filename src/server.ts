@@ -113,6 +113,8 @@ app.get("/api/status", async (_req, res) => {
   const provider = transcriptionProvider();
   const settings = await getSettings();
   res.json({
+    // Clients check this: the Mac app sends call audio and microphone as two tracks.
+    multitrack: true,
     transcriptionConfigured: transcriptionConfigured(),
     transcriptionModel: provider ? `${provider.name}/${provider.model}` : null,
     anthropicConfigured: config.anthropicConfigured,
