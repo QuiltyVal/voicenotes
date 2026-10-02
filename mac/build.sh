@@ -21,7 +21,11 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
-# Ad-hoc signature: required to run on Apple Silicon; not notarized, so macOS asks once.
-codesign --force --deep --sign - "$APP"
+# SIGN_IDENTITY (set by install.sh) is a local self-signed certificate: a stable signature keeps
+# macOS privacy permissions across rebuilds. Without it: ad-hoc signature (permissions reset each build).
+if ! codesign --force --deep --sign "${SIGN_IDENTITY:--}" "$APP"; then
+  echo "warning: signing with the local certificate failed, using an ad-hoc signature" >&2
+  codesign --force --deep --sign - "$APP"
+fi
 (cd build && ditto -c -k --keepParent Voicenotes.app Voicenotes.zip)
 echo "Built mac/build/Voicenotes.zip"
