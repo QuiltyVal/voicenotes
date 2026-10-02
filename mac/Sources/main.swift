@@ -75,6 +75,66 @@ enum RecorderError: LocalizedError {
     }
 }
 
+/// Appends to ~/Library/Logs/Voicenotes.log — what the app saw, for diagnosing silent recordings.
+func vnLog(_ message: String) {
+    let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Voicenotes.log")
+    let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
+    if let handle = try? FileHandle(forWritingTo: url) {
+        handle.seekToEndOfFile()
+        handle.write(Data(line.utf8))
+        try? handle.close()
+    } else {
+        try? Data(line.utf8).write(to: url)
+    }
+}
+
+/// How much audio a source delivered: buffers received, appended to the file, and loudest sample.
+struct SourceStats {
+    var received = 0
+    var appended = 0
+    var peak: Float = 0
+    var format = ""
+
+    var summary: String {
+        if received == 0 { return "не поступает" }
+        if peak < 0.0005 { return "тишина" }
+        return "есть звук"
+    }
+}
+
+/// Loudest sample in an audio buffer (float or 16-bit PCM), 0…1.
+func peakLevel(of buffer: CMSampleBuffer, format: AudioStreamBasicDescription) -> Float {
+    var sizeNeeded = 0
+    CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        buffer, bufferListSizeNeededOut: &sizeNeeded, bufferListOut: nil, bufferListSize: 0,
+        blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: nil)
+    guard sizeNeeded > 0 else { return 0 }
+    let raw = UnsafeMutableRawPointer.allocate(byteCount: sizeNeeded, alignment: MemoryLayout<AudioBufferList>.alignment)
+    defer { raw.deallocate() }
+    let list = raw.bindMemory(to: AudioBufferList.self, capacity: 1)
+    var block: CMBlockBuffer?
+    guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        buffer, bufferListSizeNeededOut: nil, bufferListOut: list, bufferListSize: sizeNeeded,
+        blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
+        flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &block) == noErr
+    else { return 0 }
+    let isFloat = format.mFormatFlags & kAudioFormatFlagIsFloat != 0
+    var peak: Float = 0
+    for audio in UnsafeMutableAudioBufferListPointer(list) {
+        guard let data = audio.mData else { continue }
+        if isFloat && format.mBitsPerChannel == 32 {
+            let count = Int(audio.mDataByteSize) / 4
+            let samples = data.bindMemory(to: Float.self, capacity: count)
+            for i in 0..<count { peak = max(peak, abs(samples[i])) }
+        } else if format.mBitsPerChannel == 16 {
+            let count = Int(audio.mDataByteSize) / 2
+            let samples = data.bindMemory(to: Int16.self, capacity: count)
+            for i in 0..<count { peak = max(peak, Float(abs(Int32(samples[i]))) / 32768) }
+        }
+    }
+    return peak
+}
+
 final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     private let queue = DispatchQueue(label: "voicenotes.writer")
     private var stream: SCStream?
@@ -85,7 +145,15 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
     private var sessionStarted = false
     private var sessionStart = CMTime.invalid
     private var fileURL: URL?
+    private var systemStats = SourceStats()
+    private var micStats = SourceStats()
+    private(set) var micEnabled = false
     var onStop: ((Error) -> Void)?
+
+    /// Live numbers for the menu (read on the writer queue, where they're updated).
+    func stats() -> (system: SourceStats, mic: SourceStats) {
+        queue.sync { (systemStats, micStats) }
+    }
 
     static var recordingsDir: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -139,7 +207,11 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
             self.micInput = mic
             self.fileURL = url
             self.sessionStarted = false
+            self.systemStats = SourceStats()
+            self.micStats = SourceStats()
         }
+        micEnabled = withMicrophone
+        vnLog("start: microphone=\(withMicrophone) display=\(display.width)x\(display.height) file=\(url.lastPathComponent)")
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
@@ -179,6 +251,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
                     return continuation.resume(throwing: RecorderError.writer("нет файла"))
                 }
                 self.writer = nil
+                let sys = self.systemStats, mic = self.micStats
+                vnLog("stop: system received=\(sys.received) appended=\(sys.appended) peak=\(sys.peak); mic received=\(mic.received) appended=\(mic.appended) peak=\(mic.peak)")
                 guard self.sessionStarted else {
                     writer.cancelWriting()
                     return continuation.resume(throwing: RecorderError.empty)
@@ -197,25 +271,48 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
     }
 
     // Both sources deliver host-clock timestamps on the same queue, so they line up in one file.
-    private func append(_ buffer: CMSampleBuffer, to input: AVAssetWriterInput?) {
-        guard let input, let writer, writer.status == .writing, CMSampleBufferIsValid(buffer) else { return }
+    private func measure(_ buffer: CMSampleBuffer, _ stats: inout SourceStats, _ name: String) {
+        stats.received += 1
+        guard let description = CMSampleBufferGetFormatDescription(buffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
+        else { return }
+        if stats.format.isEmpty {
+            stats.format = "\(Int(asbd.mSampleRate)) Hz, \(asbd.mChannelsPerFrame) ch, \(asbd.mBitsPerChannel) bit, flags \(asbd.mFormatFlags)"
+            vnLog("\(name): first buffer \(stats.format)")
+        }
+        stats.peak = max(stats.peak, peakLevel(of: buffer, format: asbd))
+    }
+
+    @discardableResult
+    private func append(_ buffer: CMSampleBuffer, to input: AVAssetWriterInput?) -> Bool {
+        guard let input, let writer, CMSampleBufferIsValid(buffer) else { return false }
+        guard writer.status == .writing else {
+            if writer.status == .failed { vnLog("writer failed: \(writer.error?.localizedDescription ?? "?")") }
+            return false
+        }
         let pts = CMSampleBufferGetPresentationTimeStamp(buffer)
         if !sessionStarted {
             writer.startSession(atSourceTime: pts)
             sessionStart = pts
             sessionStarted = true
         }
-        guard CMTimeCompare(pts, sessionStart) >= 0, input.isReadyForMoreMediaData else { return }
-        input.append(buffer)
+        guard CMTimeCompare(pts, sessionStart) >= 0, input.isReadyForMoreMediaData else { return false }
+        if !input.append(buffer) {
+            vnLog("append failed: \(writer.error?.localizedDescription ?? "unknown")")
+            return false
+        }
+        return true
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio else { return }
-        append(sampleBuffer, to: systemInput)
+        measure(sampleBuffer, &systemStats, "system")
+        if append(sampleBuffer, to: systemInput) { systemStats.appended += 1 }
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        append(sampleBuffer, to: micInput)
+        measure(sampleBuffer, &micStats, "mic")
+        if append(sampleBuffer, to: micInput) { micStats.appended += 1 }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -275,6 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let recorder = Recorder()
     private var state = State.idle { didSet { refresh() } }
     private var timer: Timer?
+    private var silenceWarned = false
     private var lastMeeting: URL?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -328,10 +426,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = symbol("record.circle.fill")
             button.contentTintColor = .systemRed
             button.title = " " + clock(Date().timeIntervalSince(since))
-            timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-                self?.statusItem.button?.title = " " + clock(Date().timeIntervalSince(since))
-            }
             item("Остановить и отправить", #selector(stopRecording))
+            menu.addItem(.separator())
+            let systemLine = NSMenuItem(title: "Звук приложений: …", action: nil, keyEquivalent: "")
+            let micLine = NSMenuItem(title: "Микрофон: …", action: nil, keyEquivalent: "")
+            systemLine.isEnabled = false
+            micLine.isEnabled = false
+            menu.addItem(systemLine)
+            menu.addItem(micLine)
+            timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                let elapsed = Date().timeIntervalSince(since)
+                self.statusItem.button?.title = " " + clock(elapsed)
+                let stats = self.recorder.stats()
+                systemLine.title = "Звук приложений: \(stats.system.summary)"
+                micLine.title = self.recorder.micEnabled ? "Микрофон: \(stats.mic.summary)" : "Микрофон: не разрешён"
+                // Speak up early instead of recording an hour of silence.
+                if elapsed > 8, !self.silenceWarned,
+                   stats.system.peak < 0.0005, !self.recorder.micEnabled || stats.mic.peak < 0.0005 {
+                    self.silenceWarned = true
+                    self.alert(
+                        "Звук не записывается",
+                        "Звук приложений: \(stats.system.summary). Микрофон: \(self.recorder.micEnabled ? stats.mic.summary : "не разрешён").\n\nПроверь: Системные настройки → Конфиденциальность и безопасность → «Микрофон» и «Запись экрана и системного звука» — Voicenotes включён. После включения перезапусти программу."
+                    )
+                }
+            }
         case .uploading:
             button.image = symbol("arrow.up.circle")
             button.title = button.image == nil ? "VN" : ""
@@ -370,8 +489,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func startRecording() {
         guard ServerSettings.load() != nil else { return showSettings() }
         state = .starting
-        let withMic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        silenceWarned = false
         Task { @MainActor in
+            // Ask for the microphone first and wait for the answer, so recording never starts without it by accident.
+            if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+                _ = await AVCaptureDevice.requestAccess(for: .audio)
+            }
+            let withMic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
             do {
                 try await recorder.start(withMicrophone: withMic)
                 state = .recording(since: Date())
@@ -388,9 +512,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func stopRecording() {
         guard case .recording(let since) = state else { return }
         state = .uploading
+        let stats = recorder.stats()
         Task { @MainActor in
             do {
                 let file = try await recorder.stop()
+                if stats.system.peak < 0.0005 && stats.mic.peak < 0.0005 {
+                    state = .failed(file: file, recordedAt: since, error: "в записи тишина")
+                    alert(
+                        "Запись пустая",
+                        "Звук приложений: \(stats.system.summary), микрофон: \(recorder.micEnabled ? stats.mic.summary : "не разрешён"). Файл не отправлен.\n\nПришли, что написано в журнале: в Терминале выполни  tail -20 ~/Library/Logs/Voicenotes.log"
+                    )
+                    return
+                }
                 await send(file: file, recordedAt: since)
             } catch {
                 state = .idle
