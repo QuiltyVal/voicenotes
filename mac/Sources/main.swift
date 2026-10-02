@@ -25,8 +25,39 @@ struct ServerSettings {
     static func normalize(_ raw: String) -> String {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !value.contains("://") { value = "https://" + value }
-        while value.hasSuffix("/") { value.removeLast() }
+        // http:// on a real domain gets redirected to https, and the redirect drops the password.
+        if value.hasPrefix("http://"), let host = URL(string: value)?.host,
+           !(host == "localhost" || host.hasPrefix("127.") || host.hasSuffix(".local")) {
+            value = "https://" + value.dropFirst("http://".count)
+        }
+        if let url = URL(string: value), let scheme = url.scheme, let host = url.host {
+            value = "\(scheme)://\(host)" + (url.port.map { ":\($0)" } ?? "") // drop any path like /#/m/...
+        }
         return value
+    }
+
+    func authorize(_ request: inout URLRequest) {
+        guard !password.isEmpty else { return }
+        let token = Data("voicenotes:\(password)".utf8).base64EncodedString()
+        request.setValue("Basic \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    /// nil when the server accepts the address and password, otherwise what's wrong.
+    func check() async -> String? {
+        guard let url = URL(string: self.url + "/api/status") else { return "Неверный адрес." }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        authorize(&request)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            switch (response as? HTTPURLResponse)?.statusCode ?? 0 {
+            case 200: return nil
+            case 401: return "Сервер не принял пароль. Введи тот же пароль, что при входе в приложение в браузере (логин там любой)."
+            case let code: return "Сервер ответил \(code). Проверь адрес — тот же, что открываешь в браузере."
+            }
+        } catch {
+            return "Не удалось подключиться к \(self.url): \(error.localizedDescription)"
+        }
     }
 }
 
@@ -214,10 +245,7 @@ func upload(file: URL, recordedAt: Date, to server: ServerSettings) async throws
     request.httpMethod = "POST"
     request.timeoutInterval = 900
     request.setValue("video/quicktime", forHTTPHeaderField: "Content-Type")
-    if !server.password.isEmpty {
-        let token = Data("mac:\(server.password)".utf8).base64EncodedString()
-        request.setValue("Basic \(token)", forHTTPHeaderField: "Authorization")
-    }
+    server.authorize(&request)
     let (data, response) = try await URLSession.shared.upload(for: request, fromFile: file)
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     if status == 401 { throw UploadError.message("Неверный пароль — проверь настройки") }
@@ -257,6 +285,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, case .recording = self.state else { return }
             self.alert("Запись остановилась", error.localizedDescription)
             self.stopRecording()
+        }
+        // A recording left from a failed upload or an app restart: offer to send it.
+        let leftovers = (try? FileManager.default.contentsOfDirectory(
+            at: Recorder.recordingsDir, includingPropertiesForKeys: [.creationDateKey]
+        ))?.filter { $0.pathExtension == "mov" } ?? []
+        if let file = leftovers.max(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let created = (try? file.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
+            state = .failed(file: file, recordedAt: created, error: "запись ещё не отправлена")
         }
         refresh()
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
@@ -454,8 +490,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         dialog.window.initialFirstResponder = urlField
         guard dialog.runModal() == .alertFirstButtonReturn, !urlField.stringValue.isEmpty else { return }
-        ServerSettings(url: ServerSettings.normalize(urlField.stringValue), password: passwordField.stringValue).save()
+        let settings = ServerSettings(
+            url: ServerSettings.normalize(urlField.stringValue),
+            password: passwordField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        settings.save()
         refresh()
+        Task { @MainActor in
+            if let problem = await settings.check() {
+                alert("Не подключилось", problem)
+                showSettings()
+            } else {
+                alert("Подключено ✓", "Адрес и пароль верные. Если запись не отправилась — в меню значка нажми «Повторить отправку».")
+            }
+        }
     }
 
     private func askForScreenPermission(_ error: Error) {
