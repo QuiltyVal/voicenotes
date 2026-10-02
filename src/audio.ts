@@ -84,6 +84,19 @@ export async function normalizeAudio(input: string, output: string): Promise<num
   return parseFfmpegDuration(stderr);
 }
 
+/** Peak and mean loudness (dBFS) of every audio track, to tell silence from unrecognised speech. */
+export async function trackLoudness(input: string): Promise<{ max: number; mean: number }[]> {
+  const count = Math.max(1, countAudioStreams(await runFfmpeg(["-i", input], { allowFailure: true })));
+  const result = [];
+  for (let i = 0; i < count; i++) {
+    const out = await runFfmpeg(["-i", input, "-map", `0:a:${i}`, "-af", "volumedetect", "-f", "null", "-"], { allowFailure: true });
+    const max = Number(out.match(/max_volume: (-?[\d.]+|-inf) dB/)?.[1] ?? -Infinity);
+    const mean = Number(out.match(/mean_volume: (-?[\d.]+|-inf) dB/)?.[1] ?? -Infinity);
+    result.push({ max: Number.isFinite(max) ? max : -100, mean: Number.isFinite(mean) ? mean : -100 });
+  }
+  return result;
+}
+
 /** Cuts a short mono 16 kHz WAV clip (used as a voice sample for speaker matching). */
 export async function extractClip(input: string, start: number, duration: number, output: string): Promise<void> {
   await runFfmpeg([

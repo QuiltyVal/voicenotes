@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { config } from "./config.ts";
-import { normalizeAudio, splitAudio } from "./audio.ts";
+import { normalizeAudio, splitAudio, trackLoudness } from "./audio.ts";
 import { generateNotes } from "./structure.ts";
 import { transcribe, transcriptionProvider } from "./transcribe.ts";
 import { getSettings } from "./settings.ts";
@@ -50,6 +50,24 @@ async function fileExists(file: string): Promise<boolean> {
   }
 }
 
+/** Explains an empty transcript: which track was silent, or that there was sound but no speech. */
+async function emptyRecordingMessage(file: string): Promise<string> {
+  let tracks: { max: number; mean: number }[] = [];
+  try {
+    tracks = await trackLoudness(file);
+  } catch {
+    // Fall through to the generic message.
+  }
+  const names = tracks.length === 2 ? ["звук созвона", "микрофон"] : tracks.map((_, i) => `дорожка ${i + 1}`);
+  const describe = (t: { max: number }, i: number) =>
+    `${names[i]}: ${t.max <= -60 ? "тишина" : t.max <= -35 ? `очень тихо (${Math.round(t.max)} дБ)` : `звук есть (${Math.round(t.max)} дБ)`}`;
+  const details = tracks.map(describe).join("; ");
+  if (tracks.length && tracks.every((t) => t.max <= -60)) {
+    return `Запись пустая — в файле тишина (${details}). Звук не захватывался: проверь разрешения на микрофон и запись системного звука.`;
+  }
+  return `Речь не распознана${details ? ` (${details})` : ""}. Послушай запись ниже: если там тишина или шум — звук не захватывался.`;
+}
+
 async function runTranscription(meeting: Meeting): Promise<Meeting> {
   const id = meeting.id;
   meeting = await updateMeeting(id, { status: "transcribing", error: undefined, failedStage: undefined });
@@ -85,7 +103,7 @@ async function runTranscription(meeting: Meeting): Promise<Meeting> {
   try {
     const result = await transcribe(parts, { language: meeting.language, glossary: meeting.glossary });
     if (!result.segments.length) {
-      throw new Error("В записи не распознано ни одного слова. Проверь, что микрофон или звук вкладки действительно записывались.");
+      throw new Error(await emptyRecordingMessage(meetingPath(id, meeting.originalFile)));
     }
     await saveTranscript(id, { language: result.language, segments: result.segments });
     return updateMeeting(id, {

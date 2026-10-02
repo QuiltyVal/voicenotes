@@ -24,6 +24,9 @@ async function start(streamId) {
   tabSource.connect(destination);
   tabSource.connect(ctx.destination); // capturing mutes the tab; play it back so the call stays audible
 
+  // A suspended AudioContext silently records nothing; make sure it runs.
+  if (ctx.state !== "running") await ctx.resume().catch(() => {});
+
   let micWarning = "";
   try {
     const mic = await navigator.mediaDevices.getUserMedia({
@@ -41,7 +44,11 @@ async function start(streamId) {
 
   chunks = [];
   blob = null;
-  recorder = new MediaRecorder(destination.stream, { mimeType: "audio/webm;codecs=opus", audioBitsPerSecond: 64000 });
+  // If the context still isn't running, record the tab stream directly (without the microphone)
+  // rather than a silent mix.
+  const mixOk = ctx.state === "running";
+  if (!mixOk) micWarning = "Микрофон не подмешан (браузер не дал обработать звук) — пишется только вкладка.";
+  recorder = new MediaRecorder(mixOk ? destination.stream : tab, { mimeType: "audio/webm;codecs=opus", audioBitsPerSecond: 64000 });
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   recorder.start(5000);
   return { ok: true, micWarning };
