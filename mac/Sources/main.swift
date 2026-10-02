@@ -49,14 +49,9 @@ struct ServerSettings {
         request.timeoutInterval = 15
         authorize(&request)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await URLSession.shared.data(for: request)
             switch (response as? HTTPURLResponse)?.statusCode ?? 0 {
-            case 200:
-                let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-                if json?["multitrack"] as? Bool != true {
-                    return "Сервер устарел: он не смешивает звук созвона с микрофоном, и твой голос пропадёт. Обнови его: зайди на сервер по SSH и запусти команду установки ещё раз."
-                }
-                return nil
+            case 200: return nil
             case 401: return "Сервер не принял пароль. Введи тот же пароль, что при входе в приложение в браузере (логин там любой)."
             case let code: return "Сервер ответил \(code). Проверь адрес — тот же, что открываешь в браузере."
             }
@@ -107,13 +102,17 @@ struct SourceStats {
     }
 }
 
-/// Loudest sample in an audio buffer (float or 16-bit PCM), 0…1.
-func peakLevel(of buffer: CMSampleBuffer, format: AudioStreamBasicDescription) -> Float {
+/// Samples of one audio buffer as mono Float32 (channels averaged); handles float and 16-bit PCM,
+/// interleaved or not.
+func monoSamples(of buffer: CMSampleBuffer) -> (samples: [Float], sampleRate: Double) {
+    guard let description = CMSampleBufferGetFormatDescription(buffer),
+          let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
+    else { return ([], 0) }
     var sizeNeeded = 0
     CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
         buffer, bufferListSizeNeededOut: &sizeNeeded, bufferListOut: nil, bufferListSize: 0,
         blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: nil)
-    guard sizeNeeded > 0 else { return 0 }
+    guard sizeNeeded > 0 else { return ([], asbd.mSampleRate) }
     let raw = UnsafeMutableRawPointer.allocate(byteCount: sizeNeeded, alignment: MemoryLayout<AudioBufferList>.alignment)
     defer { raw.deallocate() }
     let list = raw.bindMemory(to: AudioBufferList.self, capacity: 1)
@@ -122,33 +121,126 @@ func peakLevel(of buffer: CMSampleBuffer, format: AudioStreamBasicDescription) -
         buffer, bufferListSizeNeededOut: nil, bufferListOut: list, bufferListSize: sizeNeeded,
         blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
         flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &block) == noErr
-    else { return 0 }
-    let isFloat = format.mFormatFlags & kAudioFormatFlagIsFloat != 0
-    var peak: Float = 0
-    for audio in UnsafeMutableAudioBufferListPointer(list) {
+    else { return ([], asbd.mSampleRate) }
+
+    let isFloat = asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
+    let frames = CMSampleBufferGetNumSamples(buffer)
+    let buffers = UnsafeMutableAudioBufferListPointer(list)
+    var mono = [Float](repeating: 0, count: frames)
+    var sources = 0
+
+    for audio in buffers {
         guard let data = audio.mData else { continue }
-        if isFloat && format.mBitsPerChannel == 32 {
-            let count = Int(audio.mDataByteSize) / 4
-            let samples = data.bindMemory(to: Float.self, capacity: count)
-            for i in 0..<count { peak = max(peak, abs(samples[i])) }
-        } else if format.mBitsPerChannel == 16 {
-            let count = Int(audio.mDataByteSize) / 2
-            let samples = data.bindMemory(to: Int16.self, capacity: count)
-            for i in 0..<count { peak = max(peak, Float(abs(Int32(samples[i]))) / 32768) }
+        let channels = max(1, Int(audio.mNumberChannels))
+        let available: Int
+        if isFloat && asbd.mBitsPerChannel == 32 {
+            available = Int(audio.mDataByteSize) / 4 / channels
+            let values = data.bindMemory(to: Float.self, capacity: available * channels)
+            for f in 0..<min(frames, available) {
+                for c in 0..<channels { mono[f] += values[f * channels + c] }
+            }
+        } else if asbd.mBitsPerChannel == 16 {
+            available = Int(audio.mDataByteSize) / 2 / channels
+            let values = data.bindMemory(to: Int16.self, capacity: available * channels)
+            for f in 0..<min(frames, available) {
+                for c in 0..<channels { mono[f] += Float(values[f * channels + c]) / 32768 }
+            }
+        } else {
+            continue
+        }
+        sources += channels
+    }
+    if sources > 1 {
+        let scale = 1 / Float(sources)
+        for i in mono.indices { mono[i] *= scale }
+    }
+    return (mono, asbd.mSampleRate)
+}
+
+/// Mixes call audio and microphone into ONE mono track and writes it as AAC (.m4a).
+/// Sources are aligned by sample count, not timestamps: both arrive at 48 kHz in real time, and
+/// a source that stalls is padded with silence so the other never piles up.
+final class Mixer {
+    static let sampleRate = 48000.0
+    private var system: [Float] = []
+    private var mic: [Float] = []
+    private var micStarted = false
+    private let micEnabled: Bool
+    private let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Mixer.sampleRate, channels: 1, interleaved: false)!
+    private var file: AVAudioFile?
+    private(set) var framesWritten = 0
+    private let maxLag = Int(Mixer.sampleRate / 2) // 0.5 s
+
+    init(url: URL, micEnabled: Bool) throws {
+        self.micEnabled = micEnabled
+        file = try AVAudioFile(
+            forWriting: url,
+            settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: Mixer.sampleRate,
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: 64000,
+            ],
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+    }
+
+    func addSystem(_ samples: [Float]) {
+        system.append(contentsOf: samples)
+        drain()
+    }
+
+    func addMic(_ samples: [Float]) {
+        if !micStarted {
+            // Call audio captured before the microphone came up goes out on its own,
+            // so the voice lines up with what was playing at the same moment.
+            micStarted = true
+            write(count: system.count)
+        }
+        mic.append(contentsOf: samples)
+        drain()
+    }
+
+    private func drain(final: Bool = false) {
+        var count = micEnabled ? min(system.count, mic.count) : system.count
+        let longest = max(system.count, mic.count)
+        if final || longest - count > maxLag { count = longest }
+        write(count: count)
+    }
+
+    private func write(count: Int) {
+        guard count > 0, let file else { return }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)),
+              let out = buffer.floatChannelData?[0]
+        else { return }
+        buffer.frameLength = AVAudioFrameCount(count)
+        for i in 0..<count {
+            let value = (i < system.count ? system[i] : 0) + (i < mic.count ? mic[i] : 0)
+            out[i] = max(-1, min(1, value))
+        }
+        system.removeFirst(min(count, system.count))
+        mic.removeFirst(min(count, mic.count))
+        do {
+            try file.write(from: buffer)
+            framesWritten += count
+        } catch {
+            vnLog("write failed: \(error.localizedDescription)")
         }
     }
-    return peak
+
+    /// Writes what's left and closes the file.
+    func finish() {
+        drain(final: true)
+        file = nil // AVAudioFile finalizes the file when released
+    }
 }
 
 final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     private let queue = DispatchQueue(label: "voicenotes.writer")
     private var stream: SCStream?
     private var session: AVCaptureSession?
-    private var writer: AVAssetWriter?
-    private var systemInput: AVAssetWriterInput?
-    private var micInput: AVAssetWriterInput?
-    private var sessionStarted = false
-    private var sessionStart = CMTime.invalid
+    private var mixer: Mixer?
     private var fileURL: URL?
     private var systemStats = SourceStats()
     private var micStats = SourceStats()
@@ -175,7 +267,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
         let config = SCStreamConfiguration()
         config.capturesAudio = true
         config.excludesCurrentProcessAudio = true
-        config.sampleRate = 48000
+        config.sampleRate = Int(Mixer.sampleRate)
         config.channelCount = 1
         // Video can't be switched off; keep it as small and rare as possible.
         config.width = 2
@@ -184,39 +276,22 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
 
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let url = Recorder.recordingsDir.appendingPathComponent("meeting_\(formatter.string(from: Date())).mov")
-        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
-        let aac: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 48000,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: 64000,
-        ]
-        let system = AVAssetWriterInput(mediaType: .audio, outputSettings: aac)
-        system.expectsMediaDataInRealTime = true
-        writer.add(system)
-        var mic: AVAssetWriterInput?
-        if withMicrophone {
-            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: aac)
-            input.expectsMediaDataInRealTime = true
-            writer.add(input)
-            mic = input
-        }
-        guard writer.startWriting() else {
-            throw RecorderError.writer(writer.error?.localizedDescription ?? "неизвестная ошибка")
+        let url = Recorder.recordingsDir.appendingPathComponent("meeting_\(formatter.string(from: Date())).m4a")
+        let mixer: Mixer
+        do {
+            mixer = try Mixer(url: url, micEnabled: withMicrophone)
+        } catch {
+            throw RecorderError.writer(error.localizedDescription)
         }
 
         queue.sync {
-            self.writer = writer
-            self.systemInput = system
-            self.micInput = mic
+            self.mixer = mixer
             self.fileURL = url
-            self.sessionStarted = false
             self.systemStats = SourceStats()
             self.micStats = SourceStats()
         }
         micEnabled = withMicrophone
-        vnLog("start: microphone=\(withMicrophone) display=\(display.width)x\(display.height) file=\(url.lastPathComponent)")
+        vnLog("start: microphone=\(withMicrophone) display=\(display.width)x\(display.height) file=\(url.lastPathComponent) (single mixed track)")
 
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
@@ -231,7 +306,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
             let output = AVCaptureAudioDataOutput()
             output.audioSettings = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: 48000,
+                AVSampleRateKey: Mixer.sampleRate,
                 AVNumberOfChannelsKey: 1,
                 AVLinearPCMBitDepthKey: 32,
                 AVLinearPCMIsFloatKey: true,
@@ -242,6 +317,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
             if session.canAddOutput(output) { session.addOutput(output) }
             session.startRunning()
             self.session = session
+            vnLog("mic device: \(device.localizedName)")
         }
     }
 
@@ -252,72 +328,46 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudio
         session = nil
         return try await withCheckedThrowingContinuation { continuation in
             queue.async {
-                guard let writer = self.writer, let url = self.fileURL else {
+                guard let mixer = self.mixer, let url = self.fileURL else {
                     return continuation.resume(throwing: RecorderError.writer("нет файла"))
                 }
-                self.writer = nil
+                self.mixer = nil
+                mixer.finish()
                 let sys = self.systemStats, mic = self.micStats
-                vnLog("stop: system received=\(sys.received) appended=\(sys.appended) peak=\(sys.peak); mic received=\(mic.received) appended=\(mic.appended) peak=\(mic.peak)")
-                guard self.sessionStarted else {
-                    writer.cancelWriting()
+                vnLog("stop: system buffers=\(sys.received) peak=\(sys.peak); mic buffers=\(mic.received) peak=\(mic.peak); written \(Double(mixer.framesWritten) / Mixer.sampleRate) s")
+                guard mixer.framesWritten > 0 else {
+                    try? FileManager.default.removeItem(at: url)
                     return continuation.resume(throwing: RecorderError.empty)
                 }
-                self.systemInput?.markAsFinished()
-                self.micInput?.markAsFinished()
-                writer.finishWriting {
-                    if writer.status == .completed {
-                        continuation.resume(returning: url)
-                    } else {
-                        continuation.resume(throwing: RecorderError.writer(writer.error?.localizedDescription ?? "ошибка записи"))
-                    }
-                }
+                continuation.resume(returning: url)
             }
         }
     }
 
-    // Both sources deliver host-clock timestamps on the same queue, so they line up in one file.
-    private func measure(_ buffer: CMSampleBuffer, _ stats: inout SourceStats, _ name: String) {
+    private func take(_ buffer: CMSampleBuffer, _ stats: inout SourceStats, _ name: String) -> [Float] {
         stats.received += 1
-        guard let description = CMSampleBufferGetFormatDescription(buffer),
-              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
-        else { return }
-        if stats.format.isEmpty {
+        let (samples, rate) = monoSamples(of: buffer)
+        if stats.format.isEmpty, let description = CMSampleBufferGetFormatDescription(buffer),
+           let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee {
             stats.format = "\(Int(asbd.mSampleRate)) Hz, \(asbd.mChannelsPerFrame) ch, \(asbd.mBitsPerChannel) bit, flags \(asbd.mFormatFlags)"
             vnLog("\(name): first buffer \(stats.format)")
+            if rate != Mixer.sampleRate { vnLog("\(name): unexpected sample rate \(rate)") }
         }
-        stats.peak = max(stats.peak, peakLevel(of: buffer, format: asbd))
-    }
-
-    @discardableResult
-    private func append(_ buffer: CMSampleBuffer, to input: AVAssetWriterInput?) -> Bool {
-        guard let input, let writer, CMSampleBufferIsValid(buffer) else { return false }
-        guard writer.status == .writing else {
-            if writer.status == .failed { vnLog("writer failed: \(writer.error?.localizedDescription ?? "?")") }
-            return false
-        }
-        let pts = CMSampleBufferGetPresentationTimeStamp(buffer)
-        if !sessionStarted {
-            writer.startSession(atSourceTime: pts)
-            sessionStart = pts
-            sessionStarted = true
-        }
-        guard CMTimeCompare(pts, sessionStart) >= 0, input.isReadyForMoreMediaData else { return false }
-        if !input.append(buffer) {
-            vnLog("append failed: \(writer.error?.localizedDescription ?? "unknown")")
-            return false
-        }
-        return true
+        for value in samples { stats.peak = max(stats.peak, abs(value)) }
+        stats.appended += samples.isEmpty ? 0 : 1
+        return samples
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio else { return }
-        measure(sampleBuffer, &systemStats, "system")
-        if append(sampleBuffer, to: systemInput) { systemStats.appended += 1 }
+        guard type == .audio, CMSampleBufferIsValid(sampleBuffer) else { return }
+        let samples = take(sampleBuffer, &systemStats, "system")
+        mixer?.addSystem(samples)
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        measure(sampleBuffer, &micStats, "mic")
-        if append(sampleBuffer, to: micInput) { micStats.appended += 1 }
+        guard CMSampleBufferIsValid(sampleBuffer) else { return }
+        let samples = take(sampleBuffer, &micStats, "mic")
+        mixer?.addMic(samples)
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -346,7 +396,7 @@ func upload(file: URL, recordedAt: Date, to server: ServerSettings) async throws
     var request = URLRequest(url: components.url!)
     request.httpMethod = "POST"
     request.timeoutInterval = 900
-    request.setValue("video/quicktime", forHTTPHeaderField: "Content-Type")
+    request.setValue(file.pathExtension == "m4a" ? "audio/mp4" : "video/quicktime", forHTTPHeaderField: "Content-Type")
     server.authorize(&request)
     let (data, response) = try await URLSession.shared.upload(for: request, fromFile: file)
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -392,7 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A recording left from a failed upload or an app restart: offer to send it.
         let leftovers = (try? FileManager.default.contentsOfDirectory(
             at: Recorder.recordingsDir, includingPropertiesForKeys: [.creationDateKey]
-        ))?.filter { $0.pathExtension == "mov" } ?? []
+        ))?.filter { ["m4a", "mov"].contains($0.pathExtension) } ?? []
         if let file = leftovers.max(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             let created = (try? file.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
             state = .failed(file: file, recordedAt: created, error: "запись ещё не отправлена")
