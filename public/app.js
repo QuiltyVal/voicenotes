@@ -128,7 +128,8 @@ function saveSettings() {
 }
 
 const settingsDialog = document.getElementById("settings");
-document.getElementById("settings-btn").addEventListener("click", () => {
+document.getElementById("settings-btn").addEventListener("click", async () => {
+  try { serverStatus = await api("/api/status"); } catch { /* Use last loaded status when offline. */ }
   const form = settingsDialog.querySelector("form");
   form.notesLanguage.value = settings.notesLanguage;
   form.language.value = settings.language;
