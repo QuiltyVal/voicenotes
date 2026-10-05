@@ -236,7 +236,9 @@ app.delete("/api/meetings/:id", async (req, res) => {
 app.get("/api/meetings/:id/audio", async (req, res) => {
   const meeting = await loadMeeting(req, res);
   if (!meeting) return;
-  const file = fs.existsSync(meetingPath(meeting.id, "audio.mp3")) ? "audio.mp3" : meeting.originalFile;
+  const file = meeting.durationSec && fs.existsSync(meetingPath(meeting.id, "audio.mp3")) ? "audio.mp3" : meeting.originalFile;
+  // This URL switches from the original to the prepared MP3 once conversion finishes.
+  res.setHeader("Cache-Control", "private, no-store");
   // Relative to the meeting folder, so a dot-directory in DATA_DIR can't trip the dotfile check.
   res.sendFile(file, { root: meetingDir(meeting.id) }, (err) => {
     if (err && !res.headersSent) res.status(404).end();

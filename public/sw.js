@@ -1,6 +1,6 @@
 // Keeps the app shell available offline, so a meeting can be recorded without internet
 // and uploaded later (unsent recordings live in IndexedDB). API calls are never cached.
-const CACHE = "voicenotes-v2-transcription";
+const CACHE = "voicenotes-v3-complete-audio";
 const SHELL = ["/", "/index.html", "/app.js", "/styles.css", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {

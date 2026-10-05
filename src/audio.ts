@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { config } from "./config.ts";
 
 let ffmpegBinary: Promise<string> | undefined;
@@ -71,17 +72,24 @@ export async function normalizeAudio(input: string, output: string): Promise<num
     audioStreams > 1
       ? ["-filter_complex", `${Array.from({ length: audioStreams }, (_, i) => `[0:a:${i}]`).join("")}amix=inputs=${audioStreams}:duration=longest:normalize=0[a]`, "-map", "[a]"]
       : [];
-  const stderr = await runFfmpeg([
-    "-i", input,
-    ...mix,
-    "-vn",
-    "-ac", "1",
-    "-ar", "16000",
-    "-c:a", "libmp3lame",
-    "-b:a", "32k",
-    output,
-  ]);
-  return parseFfmpegDuration(stderr);
+  // Never expose a growing MP3 to the player: its initial size and duration would be cached.
+  const pending = `${output}.${randomUUID()}.pending.mp3`;
+  try {
+    const stderr = await runFfmpeg([
+      "-i", input,
+      ...mix,
+      "-vn",
+      "-ac", "1",
+      "-ar", "16000",
+      "-c:a", "libmp3lame",
+      "-b:a", "32k",
+      pending,
+    ]);
+    await fs.rename(pending, output);
+    return parseFfmpegDuration(stderr);
+  } finally {
+    await fs.rm(pending, { force: true });
+  }
 }
 
 /** Peak and mean loudness (dBFS) of every audio track, to tell silence from unrecognised speech. */

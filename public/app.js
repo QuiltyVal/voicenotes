@@ -841,12 +841,14 @@ function renderHome() {
 
 const audioCache = new Map();
 
-function audioFor(id) {
-  if (!audioCache.has(id)) {
+function audioFor(meeting) {
+  const version = meeting.durationSec ? "mp3" : "original";
+  const key = `${meeting.id}:${version}`;
+  if (!audioCache.has(key)) {
     audioCache.clear();
-    audioCache.set(id, h("audio", { controls: true, preload: "metadata", src: `/api/meetings/${id}/audio` }));
+    audioCache.set(key, h("audio", { controls: true, preload: "metadata", src: `/api/meetings/${meeting.id}/audio?v=${version}` }));
   }
-  return audioCache.get(id);
+  return audioCache.get(key);
 }
 
 function seek(audio, seconds) {
@@ -1060,10 +1062,11 @@ async function renderMeeting(id) {
   const token = routeToken;
   let chosenTab = null; // null = automatic: notes when they exist
   let lastStatus = null;
+  let lastDuration = null;
 
   const draw = (data) => {
     const { meeting, transcript, notes } = data;
-    const audio = audioFor(meeting.id);
+    const audio = audioFor(meeting);
     const hasContent = Boolean(notes || transcript);
     const tab = notes ? (chosenTab ?? "notes") : "transcript";
 
@@ -1263,8 +1266,9 @@ async function renderMeeting(id) {
     }
     if (token !== routeToken) return;
     // Redraw only when something changed, so the page doesn't jump while reading.
-    if (data.meeting.status !== lastStatus || !isBusy(data.meeting.status)) {
+    if (data.meeting.status !== lastStatus || data.meeting.durationSec !== lastDuration || !isBusy(data.meeting.status)) {
       lastStatus = data.meeting.status;
+      lastDuration = data.meeting.durationSec;
       draw(data);
     }
     if (isBusy(data.meeting.status)) setTimeout(poll, 3000);
