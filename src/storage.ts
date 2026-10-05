@@ -15,6 +15,8 @@ export interface Meeting {
   /** Stage to resume from when retrying after an error. */
   failedStage?: "transcribing" | "structuring";
   originalFile: string;
+  /** Model selected when the recording was uploaded. */
+  transcriptionChoice?: import("./transcription-models.ts").TranscriptionChoice;
   durationSec?: number;
   /** Optional description of what the meeting is about, given by the user. */
   context: string;
@@ -47,6 +49,9 @@ export interface Segment {
 export interface Transcript {
   language: string | null;
   segments: Segment[];
+  /** Whether speaker identities were actually returned by the provider. */
+  speakerDiarization?: boolean;
+  timestamps?: boolean;
 }
 
 const ID_RE = /^[a-z0-9-]+$/;

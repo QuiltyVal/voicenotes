@@ -68,7 +68,7 @@ DOMAIN=${DOMAIN#http://}; DOMAIN=${DOMAIN#https://}; DOMAIN=${DOMAIN%%/*}; DOMAI
 ask_secret ANTHROPIC_API_KEY "Ключ Anthropic (начинается с sk-ant-)" "$(env_get ANTHROPIC_API_KEY)"
 [ -n "$ANTHROPIC_API_KEY" ] || die "Без ключа Anthropic конспекты работать не будут."
 ask_secret OPENAI_API_KEY "Ключ OpenAI (начинается с sk-)" "$(env_get OPENAI_API_KEY)"
-[ -n "$OPENAI_API_KEY$(env_get MISTRAL_API_KEY)" ] || die "Нужен ключ OpenAI для расшифровки."
+[ -n "$OPENAI_API_KEY$(env_get MISTRAL_API_KEY)$(env_get OPENROUTER_API_KEY)" ] || die "Нужен ключ OpenAI для расшифровки."
 
 APP_PASSWORD_OLD=$(env_get APP_PASSWORD)
 if [ -n "$APP_PASSWORD_OLD" ]; then

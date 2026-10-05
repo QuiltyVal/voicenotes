@@ -56,7 +56,7 @@ function systemPrompt(language: NotesLanguage): string {
 
   return `You turn raw meeting transcripts into clear, faithful meeting notes for someone who needs to act on them or who missed the meeting.
 
-The transcript comes from automatic speech recognition with automatic speaker separation, so expect misheard words, odd punctuation and occasionally mixed-up speakers. Use context and the glossary (if given) to read through obvious recognition errors, but never add content the transcript doesn't support. When something is unclear, leave it out or list it under open questions instead of guessing.
+The transcript comes from automatic speech recognition with speaker labels only where the transcription provider supplied them. If there are no speaker labels, leave participants empty and do not invent speaker identities. Expect misheard words, odd punctuation and occasionally mixed-up speakers. Use context and the glossary (if given) to read through obvious recognition errors, but never add content the transcript doesn't support. When something is unclear, leave it out or list it under open questions instead of guessing.
 
 How to fill the fields:
 - title: what the meeting was actually about, not a generic "Meeting".
@@ -98,7 +98,7 @@ export function formatTranscript(segments: Segment[], speakers: Record<string, s
     .map((t) => {
       const name = speakers[t.speaker]?.trim();
       const who = name ? `${t.speaker} (${name})` : t.speaker;
-      return `[${formatTimestamp(t.start)}] ${who}: ${t.text}`;
+      return `[${formatTimestamp(t.start)}] ${who ? `${who}: ` : ""}${t.text}`;
     })
     .join("\n");
 }

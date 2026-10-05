@@ -8,6 +8,7 @@ import { config, type NotesLanguage } from "./config.ts";
 import { enqueue, regenerateNotes, resumePending, retry } from "./pipeline.ts";
 import { transcriptionProvider } from "./transcribe.ts";
 import { mcpRouter } from "./mcp.ts";
+import { transcriptionModels } from "./transcription-models.ts";
 import { CLAUDE_MODELS, getSettings, updateSettings } from "./settings.ts";
 import {
   createMeetingDir,
@@ -103,19 +104,19 @@ async function loadMeeting(req: Request, res: Response): Promise<Meeting | null>
   return meeting;
 }
 
-function transcriptionConfigured(): boolean {
-  const provider = transcriptionProvider();
-  if (!provider) return false;
-  return Boolean(provider.name === "openai" ? config.openaiApiKey : config.mistralApiKey);
+function transcriptionConfigured(choice?: string): boolean {
+  return transcriptionModels().some((m) => m.id === choice && m.available);
 }
 
 app.get("/api/status", async (_req, res) => {
-  const provider = transcriptionProvider();
   const settings = await getSettings();
+  const provider = transcriptionProvider(settings.transcriptionChoice);
   res.json({
     // Clients check this: the Mac app sends call audio and microphone as two tracks.
     multitrack: true,
-    transcriptionConfigured: transcriptionConfigured(),
+    transcriptionConfigured: transcriptionConfigured(settings.transcriptionChoice),
+    transcriptionChoice: settings.transcriptionChoice,
+    transcriptionModels: transcriptionModels(),
     transcriptionModel: provider ? `${provider.name}/${provider.model}` : null,
     anthropicConfigured: config.anthropicConfigured,
     notesLanguage: config.notesLanguage,
@@ -127,8 +128,13 @@ app.get("/api/status", async (_req, res) => {
 });
 
 app.put("/api/settings", async (req, res) => {
-  const settings = await updateSettings((req.body ?? {}) as Record<string, unknown>);
-  res.json({ autoNotes: settings.autoNotes, claudeModel: settings.claudeModel });
+  try {
+    const settings = await updateSettings((req.body ?? {}) as Record<string, unknown>);
+    const provider = transcriptionProvider(settings.transcriptionChoice);
+    res.json({ autoNotes: settings.autoNotes, claudeModel: settings.claudeModel, transcriptionChoice: settings.transcriptionChoice, transcriptionModel: `${provider.name}/${provider.model}`, transcriptionConfigured: transcriptionConfigured(settings.transcriptionChoice) });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
 });
 
 app.get("/api/meetings", async (_req, res) => {
@@ -157,6 +163,7 @@ app.post("/api/meetings", async (req, res) => {
     createdAt: (Number.isNaN(recordedAt.getTime()) ? new Date() : recordedAt).toISOString(),
     status: "uploaded",
     originalFile,
+    transcriptionChoice: (await getSettings()).transcriptionChoice,
     context: queryString(req.query.context).trim(),
     glossary: parseGlossary(req.query.glossary),
     language: parseLanguage(req.query.language),
@@ -243,11 +250,12 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 fs.mkdirSync(path.join(config.dataDir, "meetings"), { recursive: true });
 
-app.listen(config.port, config.host, () => {
+app.listen(config.port, config.host, async () => {
   console.log(`Voicenotes: http://${config.host === "0.0.0.0" ? "localhost" : config.host}:${config.port}`);
   console.log(`Данные: ${config.dataDir}`);
-  const provider = transcriptionProvider();
-  if (transcriptionConfigured()) console.log(`Расшифровка: ${provider!.name} (${provider!.model})`);
+  const settings = await getSettings();
+  const provider = transcriptionProvider(settings.transcriptionChoice);
+  if (transcriptionConfigured(settings.transcriptionChoice)) console.log(`Расшифровка: ${provider!.name} (${provider!.model})`);
   else console.warn("⚠ Не задан ключ для расшифровки (OPENAI_API_KEY или MISTRAL_API_KEY) — расшифровка работать не будет.");
   if (!config.anthropicConfigured) console.warn("⚠ ANTHROPIC_API_KEY не задан — конспекты работать не будут.");
   if (!config.appPassword && config.host !== "127.0.0.1" && config.host !== "localhost") {

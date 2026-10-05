@@ -51,6 +51,12 @@
         <textarea name="glossary" rows="5" placeholder="Имена, названия компаний и продуктов, термины — по одному на строку"></textarea>
         <small>Помогает правильно распознать и написать имена и термины.</small>
       </label>
+      <label>
+        Модель для расшифровки
+        <select name="transcriptionChoice" aria-describedby="transcription-help"></select>
+        <small id="transcription-help"></small>
+        <small>Общая настройка для сайта и приложения на Mac. Применяется к следующим загрузкам.</small>
+      </label>
       <label class="check">
         <input type="checkbox" name="autoNotes">
         <span>Составлять конспект автоматически <small>(через Claude API, платно)</small></span>

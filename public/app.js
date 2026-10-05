@@ -98,10 +98,12 @@ function statusBadge(status) {
 }
 
 function speakerName(label, speakers) {
+  if (!label) return "Речь";
   return speakers?.[label]?.trim() || `Спикер ${label.replace(/^S/, "")}`;
 }
 
 function speakerClass(label) {
+  if (!label) return "";
   return `spk-${(Number(label.replace(/\D/g, "")) - 1 + 6) % 6}`;
 }
 
@@ -132,6 +134,9 @@ document.getElementById("settings-btn").addEventListener("click", () => {
   form.language.value = settings.language;
   form.glossary.value = settings.glossary;
   if (serverStatus) {
+    fill(form.transcriptionChoice, (serverStatus.transcriptionModels ?? []).map((model) => h("option", { value: model.id, disabled: !model.available }, `${model.label}${model.available ? "" : " — ключ не настроен"}`)));
+    form.transcriptionChoice.value = serverStatus.transcriptionChoice;
+    updateTranscriptionHelp();
     form.autoNotes.checked = serverStatus.autoNotes;
     form.claudeModel.value = serverStatus.claudeModel;
     document.getElementById("mcp-url").value = `${location.origin}${serverStatus.mcpPath}`;
@@ -141,6 +146,11 @@ document.getElementById("settings-btn").addEventListener("click", () => {
     : "";
   settingsDialog.showModal();
 });
+function updateTranscriptionHelp() {
+  const choice = settingsDialog.querySelector("select[name=transcriptionChoice]").value;
+  document.getElementById("transcription-help").textContent = serverStatus?.transcriptionModels?.find((m) => m.id === choice)?.description ?? "";
+}
+settingsDialog.querySelector("select[name=transcriptionChoice]").addEventListener("change", updateTranscriptionHelp);
 document.getElementById("mcp-copy").addEventListener("click", () => {
   const input = document.getElementById("mcp-url");
   navigator.clipboard.writeText(input.value).then(
@@ -158,7 +168,7 @@ settingsDialog.addEventListener("close", () => {
   settings.language = form.language.value;
   settings.glossary = form.glossary.value;
   saveSettings();
-  const server = { autoNotes: form.autoNotes.checked, claudeModel: form.claudeModel.value };
+  const server = { autoNotes: form.autoNotes.checked, claudeModel: form.claudeModel.value, transcriptionChoice: form.transcriptionChoice.value };
   api("/api/settings", { method: "PUT", body: JSON.stringify(server) })
     .then((saved) => {
       Object.assign(serverStatus ?? {}, saved);
@@ -863,7 +873,7 @@ function mergeTurns(segments, maxTurnSeconds = 90) {
 
 function speakerLabels(transcript) {
   const num = (label) => Number(label.replace(/\D/g, ""));
-  return [...new Set(transcript.segments.map((s) => s.speaker))].sort((a, b) => num(a) - num(b));
+  return [...new Set(transcript.segments.map((s) => s.speaker).filter(Boolean))].sort((a, b) => num(a) - num(b));
 }
 
 function ownerName(owner, speakers) {
@@ -960,7 +970,8 @@ function renderTranscript(meeting, transcript, audio, onSaved) {
   return h(
     "div",
     {},
-    h(
+    transcript.speakerDiarization === false && h("p", { class: "muted" }, "Модель не вернула разделение по говорящим. Реплики показаны без подписей."),
+    labels.length > 0 && h(
       "details",
       { class: "card", style: "margin-top:0" },
       h("summary", { style: "cursor:pointer;font-weight:600" }, "Кто есть кто"),
@@ -981,7 +992,7 @@ function renderTranscript(meeting, transcript, audio, onSaved) {
       h(
         "div",
         { class: "turn" },
-        tsButton(audio, turn.start),
+        transcript.timestamps !== false && tsButton(audio, turn.start),
         h("div", { class: `who ${speakerClass(turn.speaker)}` }, speakerName(turn.speaker, meeting.speakers)),
         h("div", { class: "text" }, turn.text),
       ),

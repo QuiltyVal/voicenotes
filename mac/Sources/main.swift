@@ -526,6 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(entry)
         }
         item("Открыть Voicenotes", #selector(openApp))
+        item("Модель расшифровки…", #selector(showTranscriptionSettings))
         item("Настройки…", #selector(showSettings))
         menu.addItem(.separator())
         item("Выйти", #selector(quit))
@@ -652,6 +653,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         NSApp.terminate(nil)
+    }
+
+    @objc private func showTranscriptionSettings() {
+        guard let server = ServerSettings.load() else { return showSettings() }
+        Task { @MainActor in
+            do {
+                struct Model: Decodable { let id: String; let label: String; let available: Bool; let description: String }
+                struct Status: Decodable { let transcriptionChoice: String; let transcriptionModels: [Model] }
+                guard let url = URL(string: server.url + "/api/status") else { return }
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 15
+                server.authorize(&request)
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw UploadError.message("Не удалось загрузить модели. Проверь адрес и пароль в настройках.")
+                }
+                let status = try JSONDecoder().decode(Status.self, from: data)
+                let view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 38))
+                let picker = NSPopUpButton(frame: NSRect(x: 0, y: 6, width: 420, height: 28))
+                picker.addItems(withTitles: status.transcriptionModels.map { $0.label + ($0.available ? "" : " — ключ не настроен") })
+                picker.autoenablesItems = false
+                for (i, model) in status.transcriptionModels.enumerated() {
+                    picker.item(at: i)?.isEnabled = model.available
+                }
+                if let index = status.transcriptionModels.firstIndex(where: { $0.id == status.transcriptionChoice }) {
+                    picker.selectItem(at: index)
+                }
+                view.addSubview(picker)
+                let dialog = NSAlert()
+                dialog.messageText = "Модель расшифровки"
+                dialog.informativeText = "Общая настройка для Mac и сайта. Применяется к следующим загрузкам.\n\nGPT Transcribe — без таймкодов и говорящих. Voxtral через OpenRouter — с таймкодами; разделение по говорящим в тесте не вернулось. GPT-4o diarize — с говорящими."
+                dialog.accessoryView = view
+                dialog.addButton(withTitle: "Сохранить")
+                dialog.addButton(withTitle: "Отмена")
+                NSApp.activate(ignoringOtherApps: true)
+                guard dialog.runModal() == .alertFirstButtonReturn else { return }
+                let index = picker.indexOfSelectedItem
+                guard status.transcriptionModels.indices.contains(index), status.transcriptionModels[index].available,
+                      let saveURL = URL(string: server.url + "/api/settings") else { return }
+                var save = URLRequest(url: saveURL)
+                save.httpMethod = "PUT"
+                save.timeoutInterval = 15
+                server.authorize(&save)
+                save.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                save.httpBody = try JSONSerialization.data(withJSONObject: ["transcriptionChoice": status.transcriptionModels[index].id])
+                let (_, savedResponse) = try await URLSession.shared.data(for: save)
+                guard (savedResponse as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw UploadError.message("Сервер не сохранил модель. Попробуй ещё раз.")
+                }
+                alert("Модель сохранена", status.transcriptionModels[index].label)
+            } catch {
+                alert("Не получилось выбрать модель", error.localizedDescription)
+            }
+        }
     }
 
     @objc private func showSettings() {

@@ -21,14 +21,15 @@ function effort(value: string): "low" | "medium" | "high" {
   return value === "low" || value === "high" ? value : "medium";
 }
 
-export type TranscriptionProvider = "mistral" | "openai";
+export type TranscriptionProvider = "mistral" | "openai" | "openrouter";
 
 /** Explicit TRANSCRIPTION_PROVIDER wins; otherwise whichever key is set (Mistral first: EU processing). */
 function transcriptionProvider(): TranscriptionProvider | null {
   const explicit = env("TRANSCRIPTION_PROVIDER").toLowerCase();
-  if (explicit === "mistral" || explicit === "openai") return explicit;
+  if (explicit === "mistral" || explicit === "openai" || explicit === "openrouter") return explicit;
   if (env("MISTRAL_API_KEY")) return "mistral";
   if (env("OPENAI_API_KEY")) return "openai";
+  if (env("OPENROUTER_API_KEY")) return "openrouter";
   return null;
 }
 
@@ -38,6 +39,8 @@ export const config = {
   dataDir: path.resolve(env("DATA_DIR", "./data")),
   appPassword: env("APP_PASSWORD"),
   transcriptionProvider: transcriptionProvider(),
+  openrouterApiKey: env("OPENROUTER_API_KEY"),
+  openrouterBaseUrl: env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
   mistralApiKey: env("MISTRAL_API_KEY"),
   // Optional override of the Mistral API address (proxies, local tests).
   mistralBaseUrl: env("MISTRAL_BASE_URL"),

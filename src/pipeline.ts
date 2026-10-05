@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { config } from "./config.ts";
-import { normalizeAudio, splitAudio, trackLoudness } from "./audio.ts";
+import { normalizeAudio, splitAudio, trackLoudness, prepareSourceAudio } from "./audio.ts";
 import { generateNotes } from "./structure.ts";
 import { transcribe, transcriptionProvider } from "./transcribe.ts";
 import { getSettings } from "./settings.ts";
@@ -90,22 +92,25 @@ async function runTranscription(meeting: Meeting): Promise<Meeting> {
     meeting = await updateMeeting(id, { durationSec });
   }
 
-  const provider = transcriptionProvider();
-  if (!provider) throw new Error("Не задан ключ для расшифровки: впиши OPENAI_API_KEY или MISTRAL_API_KEY в .env.");
-
+  const provider = transcriptionProvider(meeting.transcriptionChoice ?? (await getSettings()).transcriptionChoice);
   const duration = meeting.durationSec ?? 0;
-  const parts =
-    duration > provider.maxPartSeconds
-      ? (await splitAudio(audio, provider.maxPartSeconds)).map((file, i) => ({ file, offset: i * provider.maxPartSeconds }))
-      : [{ file: audio, offset: 0 }];
-
-  console.log(`[${id}] transcribing ${Math.round(duration / 60)} min in ${parts.length} part(s) with ${provider.name}`);
+  const temp = provider.sourceAudio ? await fs.mkdtemp(path.join(os.tmpdir(), "voicenotes-source-")) : null;
+  let parts = [{ file: audio, offset: 0 }];
   try {
-    const result = await transcribe(parts, { language: meeting.language, glossary: meeting.glossary });
+    if (temp) {
+      const source = path.join(temp, "source.flac");
+      await prepareSourceAudio(meetingPath(id, meeting.originalFile), source);
+      parts = [{ file: source, offset: 0 }];
+    }
+    if (duration > provider.maxPartSeconds) {
+      parts = (await splitAudio(parts[0]!.file, provider.maxPartSeconds)).map((file, i) => ({ file, offset: i * provider.maxPartSeconds }));
+    }
+    console.log(`[${id}] transcribing ${Math.round(duration / 60)} min in ${parts.length} part(s) with ${provider.name}`);
+    const result = await transcribe(parts, { language: meeting.language, glossary: meeting.glossary }, provider);
     if (!result.segments.length) {
       throw new Error(await emptyRecordingMessage(meetingPath(id, meeting.originalFile)));
     }
-    await saveTranscript(id, { language: result.language, segments: result.segments });
+    await saveTranscript(id, { language: result.language, segments: result.segments, speakerDiarization: result.speakerDiarization, timestamps: result.timestamps });
     return updateMeeting(id, {
       // With auto notes off, notes are made later: from the UI button or from Claude via MCP.
       status: (await getSettings()).autoNotes ? "structuring" : "done",
@@ -117,7 +122,8 @@ async function runTranscription(meeting: Meeting): Promise<Meeting> {
       },
     });
   } finally {
-    if (parts.length > 1) await Promise.all(parts.map((p) => fs.rm(p.file, { force: true })));
+    if (temp) await fs.rm(temp, { recursive: true, force: true });
+    if (!temp && parts.length > 1) await Promise.all(parts.map((p) => fs.rm(p.file, { force: true })));
   }
 }
 

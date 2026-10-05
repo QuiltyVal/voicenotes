@@ -24,8 +24,8 @@ function openai(): OpenAI {
   return client;
 }
 
-function isDiarizeModel(): boolean {
-  return config.openaiTranscribeModel.includes("diarize");
+function isDiarizeModel(model: string): boolean {
+  return model.includes("diarize");
 }
 
 /** Voice samples of speakers from the first part, so later parts keep the same labels. */
@@ -45,14 +45,15 @@ async function requestPart(
   file: string,
   opts: TranscribeOptions,
   known: KnownSpeakers | null,
+  model: string,
 ): Promise<{ segments: RawSegment[]; seconds: number }> {
-  const upload = await toFile(await fs.readFile(file), path.basename(file), { type: "audio/mpeg" });
+  const upload = await toFile(await fs.readFile(file), path.basename(file), { type: path.extname(file) === ".flac" ? "audio/flac" : "audio/mpeg" });
   const language = opts.language ? { language: opts.language } : {};
 
-  if (!isDiarizeModel()) {
+  if (!isDiarizeModel(model)) {
     // Models without diarization: plain text, one speaker, no timestamps.
     const res = await openai().audio.transcriptions.create({
-      model: config.openaiTranscribeModel,
+      model,
       file: upload,
       response_format: "json",
       ...language,
@@ -62,7 +63,7 @@ async function requestPart(
 
   // The SDK's overloads don't cover diarized_json, hence the cast.
   const res = (await openai().audio.transcriptions.create({
-    model: config.openaiTranscribeModel,
+    model,
     file: upload,
     response_format: "diarized_json",
     chunking_strategy: "auto",
@@ -76,15 +77,15 @@ async function requestPart(
   };
 }
 
-async function transcribePart(file: string, opts: TranscribeOptions, known: KnownSpeakers | null) {
+async function transcribePart(file: string, opts: TranscribeOptions, known: KnownSpeakers | null, model: string) {
   try {
-    return await requestPart(file, opts, known);
+    return await requestPart(file, opts, known, model);
   } catch (err) {
     // A rejected language code or voice sample shouldn't fail the whole meeting.
     const hinted = Boolean(opts.language || known);
     if (!(err instanceof OpenAI.BadRequestError) || !hinted) throw err;
     console.warn(`OpenAI rejected language/speaker hints (${err.message}); retrying without them.`);
-    return requestPart(file, { ...opts, language: "" }, null);
+    return requestPart(file, { ...opts, language: "" }, null, model);
   }
 }
 
@@ -119,7 +120,7 @@ async function buildReferences(segments: Segment[], part: AudioPart): Promise<Kn
   }
 }
 
-export async function transcribeWithOpenAI(parts: AudioPart[], opts: TranscribeOptions): Promise<TranscriptionResult> {
+export async function transcribeWithOpenAI(parts: AudioPart[], opts: TranscribeOptions, model = config.openaiTranscribeModel): Promise<TranscriptionResult> {
   const labels = new SpeakerLabels();
   const segments: Segment[] = [];
   let known: KnownSpeakers | null = null;
@@ -127,19 +128,19 @@ export async function transcribeWithOpenAI(parts: AudioPart[], opts: TranscribeO
 
   try {
     for (const [i, part] of parts.entries()) {
-      const result = await transcribePart(part.file, opts, known);
+      const result = await transcribePart(part.file, opts, known, model);
       audioSeconds += result.seconds;
       const knownNames = new Set(known?.names);
       const partSegments: Segment[] = [];
       for (const seg of result.segments) {
         // Known speakers come back under the label we gave them; others are A, B, ... per request.
         const speaker =
-          seg.speaker && knownNames.has(seg.speaker) ? seg.speaker : labels.label(`${i}:${seg.speaker ?? "unknown"}`);
+          !isDiarizeModel(model) ? "" : seg.speaker && knownNames.has(seg.speaker) ? seg.speaker : labels.label(`${i}:${seg.speaker ?? "unknown"}`);
         pushSegment(partSegments, { ...seg, speaker }, part.offset);
       }
       segments.push(...partSegments);
 
-      if (i === 0 && parts.length > 1 && isDiarizeModel()) {
+      if (i === 0 && parts.length > 1 && isDiarizeModel(model)) {
         known = await buildReferences(partSegments, part).catch((err) => {
           console.warn("Could not build speaker samples; parts will be labelled separately.", err);
           return null;
@@ -153,5 +154,5 @@ export async function transcribeWithOpenAI(parts: AudioPart[], opts: TranscribeO
     throw err;
   }
 
-  return { language: opts.language || null, segments, audioSeconds, model: config.openaiTranscribeModel };
+  return { language: opts.language || null, segments, audioSeconds, model, speakerDiarization: isDiarizeModel(model), timestamps: isDiarizeModel(model) };
 }

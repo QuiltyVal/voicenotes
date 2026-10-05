@@ -112,13 +112,21 @@ export async function extractClip(input: string, start: number, duration: number
 /** Splits audio into parts no longer than `partSeconds`. Returns the part paths in order. */
 export async function splitAudio(input: string, partSeconds: number): Promise<string[]> {
   const dir = path.dirname(input);
+  const ext = path.extname(input).slice(1);
   await runFfmpeg([
     "-i", input,
     "-f", "segment",
     "-segment_time", String(partSeconds),
     "-c", "copy",
-    path.join(dir, "part-%03d.mp3"),
+    path.join(dir, `part-%03d.${ext}`),
   ]);
-  const files = (await fs.readdir(dir)).filter((f) => /^part-\d{3}\.mp3$/.test(f)).sort();
+  const files = (await fs.readdir(dir)).filter((f) => /^part-\d{3}\.[a-z0-9]+$/.test(f) && f.endsWith(`.${ext}`)).sort();
   return files.map((f) => path.join(dir, f));
+}
+
+/** Lossless mono audio for transcription, mixed from the original recording. */
+export async function prepareSourceAudio(input: string, output: string): Promise<void> {
+  const streams = countAudioStreams(await runFfmpeg(["-i", input], { allowFailure: true }));
+  const mix = streams > 1 ? ["-filter_complex", `${Array.from({ length: streams }, (_, i) => `[0:a:${i}]`).join("")}amix=inputs=${streams}:duration=longest:normalize=0[a]`, "-map", "[a]"] : [];
+  await runFfmpeg(["-i", input, ...mix, "-vn", "-ac", "1", "-ar", "48000", "-c:a", "flac", output]);
 }
